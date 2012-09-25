@@ -394,7 +394,7 @@ sub determine_installed_releases {
         if ( my $cv = $Module::CoreList::version{ $opt_perlver }->{$module} ) {
             $cv =~ s/ //g;
             if (version->parse($cv) >= version->parse($mod_version)) {
-                warn "$module $mod_version is core in perl $opt_perlver (as v$cv) - skipped\n";
+                warn "$module is core in perl $opt_perlver (lib: $mod_version, core: $cv) - skipped\n";
                 next;
             }
         }
