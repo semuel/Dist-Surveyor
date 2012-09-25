@@ -701,9 +701,10 @@ sub get_candidate_cpan_dist_releases {
         if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
 
     # filter out perl-like releases
-    @$hits = grep {
-        $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/;
-    } @$hits;
+    @$hits = 
+        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/ } 
+        @$hits;
 
     for my $hit (@$hits) {
         $hit->{release_id} = delete $hit->{_parent};
@@ -764,9 +765,10 @@ sub get_candidate_cpan_dist_releases_fallback {
         if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
 
     # filter out perl-like releases
-    @$hits = grep {
-        $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/;
-    } @$hits;
+    @$hits = 
+        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/ } 
+        @$hits;
 
     for my $hit (@$hits) {
         $hit->{release_id} = delete $hit->{_parent};
@@ -815,7 +817,7 @@ sub get_module_versions_in_release {
 
         # XXX try to ignore files that won't get installed
         # XXX should use META noindex!
-        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak)\b!) {
+        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b!) {
             warn "$author/$release: ignored non-installed module $path\n"
                 if $opt_debug;
             next;
