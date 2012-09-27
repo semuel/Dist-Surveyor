@@ -475,7 +475,8 @@ sub determine_installed_releases {
             ||= pick_best_cpan_dist_release($ccdr, \%installed_mod_info);
 
         my $note = "";
-        if (@$best > 1) { # try using perllocal.pod to narrow the options
+        if ((@$best > 1) and $installed_meta->{perllocalpod}) { 
+            # try using perllocal.pod to narrow the options, if there is one
             # XXX TODO move this logic into the per-candidate-distro loop below
             # it doesn't make much sense to be here at the per-module level
             my @in_perllocal = grep {
