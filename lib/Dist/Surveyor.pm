@@ -703,7 +703,7 @@ sub get_candidate_cpan_dist_releases {
     # filter out perl-like releases
     @$hits = 
         grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/ } 
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
         @$hits;
 
     for my $hit (@$hits) {
@@ -767,7 +767,7 @@ sub get_candidate_cpan_dist_releases_fallback {
     # filter out perl-like releases
     @$hits = 
         grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/ } 
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
         @$hits;
 
     for my $hit (@$hits) {
