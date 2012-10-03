@@ -1,6 +1,6 @@
 package Dist::Surveyor;
 {
-  $Dist::Surveyor::VERSION = '0.001';
+  $Dist::Surveyor::VERSION = '0.002';
 }
 
 =head1 NAME
@@ -9,7 +9,7 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 VERSION
 
-version 0.001
+version 0.002
 
 =head1 SYNOPSIS
 
@@ -76,7 +76,12 @@ $opt_perlver = version->parse($opt_perlver || $])->numify;
 
 my $major_error_count = 0; # exit status
 
-my $metacpan_size = 999; # don't make too large, hurts the server
+# We have to limit the number of results when using MetaCPAN::API.
+# We can'r make it too large as it hurts the server (it preallocates)
+# but need to make it large enough for worst case distros (eg eBay-API).
+# TODO: switching to the ElasticSearch module, with cursor support, will
+# probably avoid the need for this. Else we could dynamically adjust.
+my $metacpan_size = 2500;
 my $metacpan_calls = 0;
 my $metacpan_api ||= MetaCPAN::API->new(
     ua_args => [ agent => $0 ],
@@ -95,8 +100,8 @@ if (not $opt_uncached) {
     # XXX this locking is flawed but good enough for my needs
     # http://search.cpan.org/~pmqs/DB_File-1.824/DB_File.pm#HINTS_AND_TIPS
     my $fd = $db->fd;
-    open(DB_FH, "+<&=$fd") || die "dup $!";
-    flock (DB_FH, LOCK_EX) || die "flock: $!";
+    open(my $DB_FH, "+<&=$fd") || die "dup $!";
+    flock ($DB_FH, LOCK_EX) || die "flock: $!";
 }
 my %memoize_subs = (
     get_candidate_cpan_dist_releases => { generation => 1 },
@@ -117,8 +122,8 @@ for my $subname (keys %memoize_subs) {
 
 # for distros with names that don't match the principle module name
 # yet the principle module version always matches the distro
-# Used for perllocal.pod lookups
-# # XXX should be automated lookup rather than hardcoded
+# Used for perllocal.pod lookups and for picking 'token packages' for minicpan
+# # XXX should be automated lookup rather than hardcoded (else remove perllocal.pod parsing)
 my %distro_key_mod_names = (
     'PathTools' => 'File::Spec',
     'Template-Toolkit' => 'Template',
@@ -130,20 +135,23 @@ my %distro_key_mod_names = (
 
 sub main {
 
-# give only top-level lib dir, the archlib will be added automatically
-my @libdir = shift @ARGV or die "No perl lib directory specified\n";
-die "$libdir[0] isn't a directory\n" unless -d $libdir[0];
-my $archdir = "$libdir[0]/$Config{archname}";
-if (-d $archdir) {
-    unshift @libdir, $archdir;
-}
-else {
-    warn "No $Config{archname} directory in $libdir[0].\n";
-    warn "This probably means you've given the wrong directory\n";
-    warn "(or that you're using the wrong perl build).\n";
+die "Usage: $0 perl-lib-directory [...]\n"
+    unless @ARGV;
+my @libdirs = @ARGV;
+
+# check dirs and add archlib's if appropriate
+for my $libdir (@libdirs) {
+    die "$libdir isn't a directory\n"
+        unless -d $libdir;
+
+    my $archdir = "$libdir/$Config{archname}";
+    if (-d $archdir) {
+        unshift @libdirs, $archdir
+            unless grep { $_ eq $archdir } @libdirs;
+    }
 }
 
-my @installed_releases = determine_installed_releases(@libdir);
+my @installed_releases = determine_installed_releases(@libdirs);
 write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
 
 warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
@@ -393,7 +401,7 @@ sub determine_installed_releases {
         if ( my $cv = $Module::CoreList::version{ $opt_perlver }->{$module} ) {
             $cv =~ s/ //g;
             if (version->parse($cv) >= version->parse($mod_version)) {
-                warn "$module $mod_version is core in perl $opt_perlver (as v$cv) - skipped\n";
+                warn "$module is core in perl $opt_perlver (lib: $mod_version, core: $cv) - skipped\n";
                 next;
             }
         }
@@ -474,7 +482,8 @@ sub determine_installed_releases {
             ||= pick_best_cpan_dist_release($ccdr, \%installed_mod_info);
 
         my $note = "";
-        if (@$best > 1) { # try using perllocal.pod to narrow the options
+        if ((@$best > 1) and $installed_meta->{perllocalpod}) { 
+            # try using perllocal.pod to narrow the options, if there is one
             # XXX TODO move this logic into the per-candidate-distro loop below
             # it doesn't make much sense to be here at the per-module level
             my @in_perllocal = grep {
@@ -700,9 +709,10 @@ sub get_candidate_cpan_dist_releases {
         if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
 
     # filter out perl-like releases
-    @$hits = grep {
-        $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/;
-    } @$hits;
+    @$hits = 
+        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
+        @$hits;
 
     for my $hit (@$hits) {
         $hit->{release_id} = delete $hit->{_parent};
@@ -763,9 +773,10 @@ sub get_candidate_cpan_dist_releases_fallback {
         if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
 
     # filter out perl-like releases
-    @$hits = grep {
-        $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-5.6.1-)/;
-    } @$hits;
+    @$hits = 
+        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
+        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
+        @$hits;
 
     for my $hit (@$hits) {
         $hit->{release_id} = delete $hit->{_parent};
@@ -814,7 +825,7 @@ sub get_module_versions_in_release {
 
         # XXX try to ignore files that won't get installed
         # XXX should use META noindex!
-        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak)\b!) {
+        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b!) {
             warn "$author/$release: ignored non-installed module $path\n"
                 if $opt_debug;
             next;
@@ -993,7 +1004,7 @@ sub perllocal_distro_mod_version {
     our $perllocal_distro_mod_version;
     if (not $perllocal_distro_mod_version) { # initial setup
         warn "Only first perllocal.pod file will be processed: @$perllocalpod\n"
-            if @$perllocalpod > 1;
+            if ref $perllocalpod eq 'ARRAY' and @$perllocalpod > 1;
 
         $perllocal_distro_mod_version = {};
         # extract data from perllocal.pod

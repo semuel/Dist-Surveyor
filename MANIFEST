@@ -6,8 +6,9 @@ META.yml
 Makefile.PL
 README
 bin/dist_surveyor
+bin/dist_surveyor_fatpacked
 dist.ini
-dist_surveyor.log
+fatpackit.sh
 lib/Dist/Surveyor.pm
 t/00-compile.t
 xt/release/distmeta.t

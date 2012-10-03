@@ -8,7 +8,7 @@ build_requires:
 configure_requires:
   ExtUtils::MakeMaker: 6.30
 dynamic_config: 0
-generated_by: 'Dist::Zilla version 4.300003, CPAN::Meta::Converter version 2.101610'
+generated_by: 'Dist::Zilla version 4.300024, CPAN::Meta::Converter version 2.120921'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -55,6 +55,6 @@ requires:
   version: 0
   warnings: 0
 resources:
-  homepage: http://github.com/timbunce/Dist-Surveyor/tree
-  repository: git://github.com/timbunce/Dist-Surveyor.git
-version: 0.001
+  homepage: https://github.com/semuel/Dist-Surveyor
+  repository: https://github.com/semuel/Dist-Surveyor.git
+version: 0.002

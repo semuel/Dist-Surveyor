@@ -20,7 +20,8 @@ my %WriteMakefileArgs = (
   },
   "DISTNAME" => "Dist-Surveyor",
   "EXE_FILES" => [
-    "bin/dist_surveyor"
+    "bin/dist_surveyor",
+    "bin/dist_surveyor_fatpacked"
   ],
   "LICENSE" => "perl",
   "NAME" => "Dist::Surveyor",
@@ -58,7 +59,7 @@ my %WriteMakefileArgs = (
     "version" => 0,
     "warnings" => 0
   },
-  "VERSION" => "0.001",
+  "VERSION" => "0.002",
   "test" => {
     "TESTS" => "t/*.t"
   }

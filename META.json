@@ -4,7 +4,7 @@
       "Tim Bunce <Tim.Bunce@pobox.com>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Dist::Zilla version 4.300003, CPAN::Meta::Converter version 2.101610",
+   "generated_by" : "Dist::Zilla version 4.300024, CPAN::Meta::Converter version 2.120921",
    "license" : [
       "perl_5"
    ],
@@ -29,57 +29,57 @@
       },
       "runtime" : {
          "requires" : {
-            "CPAN::DistnameInfo" : 0,
-            "Carp" : 0,
-            "Compress::Zlib" : 0,
-            "Config" : 0,
-            "DBI" : 0,
-            "DB_File" : 0,
-            "Data::Dumper::Concise" : 0,
-            "Digest::SHA" : 0,
-            "Fcntl" : 0,
-            "File::Basename" : 0,
-            "File::Fetch" : 0,
-            "File::Find" : 0,
-            "File::Path" : 0,
-            "File::Slurp" : 0,
-            "File::Spec" : 0,
-            "File::Spec::Unix" : 0,
-            "Getopt::Long" : 0,
-            "LWP::Simple" : 0,
-            "List::Util" : 0,
-            "MLDBM" : 0,
-            "Memoize" : 0,
+            "CPAN::DistnameInfo" : "0",
+            "Carp" : "0",
+            "Compress::Zlib" : "0",
+            "Config" : "0",
+            "DBI" : "0",
+            "DB_File" : "0",
+            "Data::Dumper::Concise" : "0",
+            "Digest::SHA" : "0",
+            "Fcntl" : "0",
+            "File::Basename" : "0",
+            "File::Fetch" : "0",
+            "File::Find" : "0",
+            "File::Path" : "0",
+            "File::Slurp" : "0",
+            "File::Spec" : "0",
+            "File::Spec::Unix" : "0",
+            "Getopt::Long" : "0",
+            "LWP::Simple" : "0",
+            "List::Util" : "0",
+            "MLDBM" : "0",
+            "Memoize" : "0",
             "MetaCPAN::API" : "0.32",
-            "Module::CoreList" : 0,
-            "Module::Metadata" : 0,
-            "Storable" : 0,
-            "Try::Tiny" : 0,
-            "URI" : 0,
-            "autodie" : 0,
-            "constant" : 0,
+            "Module::CoreList" : "0",
+            "Module::Metadata" : "0",
+            "Storable" : "0",
+            "Try::Tiny" : "0",
+            "URI" : "0",
+            "autodie" : "0",
+            "constant" : "0",
             "perl" : "5.006",
-            "strict" : 0,
-            "version" : 0,
-            "warnings" : 0
+            "strict" : "0",
+            "version" : "0",
+            "warnings" : "0"
          }
       },
       "test" : {
          "requires" : {
-            "File::Temp" : 0,
+            "File::Temp" : "0",
             "Test::More" : "0.88"
          }
       }
    },
    "release_status" : "stable",
    "resources" : {
-      "homepage" : "http://github.com/timbunce/Dist-Surveyor/tree",
+      "homepage" : "https://github.com/semuel/Dist-Surveyor",
       "repository" : {
          "type" : "git",
-         "url" : "git://github.com/timbunce/Dist-Surveyor.git",
-         "web" : "http://github.com/timbunce/Dist-Surveyor/tree"
+         "url" : "https://github.com/semuel/Dist-Surveyor.git",
+         "web" : "https://github.com/semuel/Dist-Surveyor"
       }
    },
-   "version" : "0.001"
+   "version" : "0.002"
 }
 
