@@ -93,8 +93,12 @@ if (not $opt_uncached) {
     # XXX this locking is flawed but good enough for my needs
     # http://search.cpan.org/~pmqs/DB_File-1.824/DB_File.pm#HINTS_AND_TIPS
     my $fd = $db->fd;
-    open(my $DB_FH, "+<&=$fd") || die "dup $!";
-    flock ($DB_FH, LOCK_EX) || die "flock: $!";
+    # bug in DB_File on windows causes it to always return 0
+    # in this case, skip the locking
+    if ($fd > 0) {
+        open(my $DB_FH, "+<&=$fd") || die "dup $!";
+        flock ($DB_FH, LOCK_EX) || die "flock: $!";
+    }
 }
 my %memoize_subs = (
     get_candidate_cpan_dist_releases => { generation => 1 },
