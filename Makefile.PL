@@ -20,8 +20,7 @@ my %WriteMakefileArgs = (
   },
   "DISTNAME" => "Dist-Surveyor",
   "EXE_FILES" => [
-    "bin/dist_surveyor",
-    "bin/dist_surveyor_fatpacked"
+    "bin/dist_surveyor"
   ],
   "LICENSE" => "perl",
   "NAME" => "Dist::Surveyor",
@@ -32,7 +31,7 @@ my %WriteMakefileArgs = (
     "Config" => 0,
     "DBI" => 0,
     "DB_File" => 0,
-    "Data::Dumper::Concise" => 0,
+    "Data::Dumper" => 0,
     "Digest::SHA" => 0,
     "Fcntl" => 0,
     "File::Basename" => 0,
@@ -43,23 +42,21 @@ my %WriteMakefileArgs = (
     "File::Spec" => 0,
     "File::Spec::Unix" => 0,
     "Getopt::Long" => 0,
-    "LWP::Simple" => 0,
+    "JSON" => 0,
+    "LWP::UserAgent" => 0,
     "List::Util" => 0,
-    "MLDBM" => 0,
     "Memoize" => 0,
-    "MetaCPAN::API" => "0.32",
     "Module::CoreList" => 0,
     "Module::Metadata" => 0,
     "Storable" => 0,
-    "Try::Tiny" => 0,
     "URI" => 0,
-    "autodie" => 0,
+    "base" => 0,
     "constant" => 0,
     "strict" => 0,
     "version" => 0,
     "warnings" => 0
   },
-  "VERSION" => "0.003",
+  "VERSION" => "0.004",
   "test" => {
     "TESTS" => "t/*.t"
   }

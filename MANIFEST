@@ -6,10 +6,11 @@ META.yml
 Makefile.PL
 README
 bin/dist_surveyor
-bin/dist_surveyor_fatpacked
 dist.ini
+dist_surveyor-2.db
 fatpackit.sh
 lib/Dist/Surveyor.pm
+lib/Dist/Surveyor/DB_File.pm
 t/00-compile.t
 xt/release/distmeta.t
 xt/release/pod-syntax.t

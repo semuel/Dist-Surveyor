@@ -1,6 +1,6 @@
 package Dist::Surveyor;
 {
-  $Dist::Surveyor::VERSION = '0.003';
+  $Dist::Surveyor::VERSION = '0.004';
 }
 
 =head1 NAME
@@ -9,7 +9,7 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 VERSION
 
-version 0.003
+version 0.004
 
 =head1 SYNOPSIS
 
@@ -21,12 +21,11 @@ use strict;
 use warnings;
 
 use version;
-use autodie;
 use Carp;
 use Compress::Zlib;
 use Config;
 use CPAN::DistnameInfo;
-use Data::Dumper::Concise;
+use Data::Dumper;
 use DBI qw(looks_like_number);
 use Digest::SHA qw(sha1_base64);
 use Fcntl qw(:DEFAULT :flock);
@@ -36,23 +35,24 @@ use File::Find;
 use File::Path;
 use File::Slurp;
 use File::Spec;
-use File::Spec::Unix;
 use Getopt::Long;
 use List::Util qw(max sum);
-use LWP::Simple;
+use LWP::UserAgent;
 use Memoize;
-use MetaCPAN::API 0.32;
-use DB_File;
-use MLDBM qw(DB_File Storable);
+use Dist::Surveyor::DB_File;
 use Module::CoreList;
 use Module::Metadata;
-use Storable qw(nfreeze);
-use Try::Tiny;
+# use Storable qw(nfreeze);
 use URI;
+use JSON;
 
 use constant PROGNAME => 'dist_surveyor';
 use constant ON_WIN32 => $^O eq 'MSWin32';
 use constant ON_VMS   => $^O eq 'VMS';
+
+if (ON_VMS) {
+    require File::Spec::Unix;
+}
 
 GetOptions(
     'match=s' => \my $opt_match,
@@ -83,29 +83,20 @@ my $major_error_count = 0; # exit status
 # probably avoid the need for this. Else we could dynamically adjust.
 my $metacpan_size = 2500;
 my $metacpan_calls = 0;
-my $metacpan_api ||= MetaCPAN::API->new(
-    ua_args => [ agent => $0 ],
-);
-
+my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
 
 # caching via persistent memoize
 
-my $db_generation = 1; # XXX increment on incompatible change
+my $db_generation = 2; # XXX increment on incompatible change
 my $memoize_file = PROGNAME."-$db_generation.db";
 my %memoize_cache;
+my $locking_file;
 if (not $opt_uncached) {
-    # XXX no need for MLDBM now? Could just use DB_File
-    my $db = tie %memoize_cache => 'MLDBM', $memoize_file, O_CREAT|O_RDWR, 0640
+    open $locking_file, ">", "$memoize_file.lock" 
+        or die "Unable to open lock file: $!";
+    flock ($locking_file, LOCK_EX) || die "flock: $!";
+    tie %memoize_cache => 'Dist::Surveyor::DB_File', $memoize_file, O_CREAT|O_RDWR, 0640
         or die "Unable to use persistent cache: $!";
-    # XXX this locking is flawed but good enough for my needs
-    # http://search.cpan.org/~pmqs/DB_File-1.824/DB_File.pm#HINTS_AND_TIPS
-    my $fd = $db->fd;
-    # bug in DB_File on windows causes it to always return 0
-    # in this case, skip the locking
-    if ($fd > 0) {
-        open(my $DB_FH, "+<&=$fd") || die "dup $!";
-        flock ($DB_FH, LOCK_EX) || die "flock: $!";
-    }
 }
 my %memoize_subs = (
     get_candidate_cpan_dist_releases => { generation => 1 },
@@ -139,33 +130,33 @@ my %distro_key_mod_names = (
 
 sub main {
 
-die "Usage: $0 perl-lib-directory [...]\n"
-    unless @ARGV;
-my @libdirs = @ARGV;
+    die "Usage: $0 perl-lib-directory [...]\n"
+        unless @ARGV;
+    my @libdirs = @ARGV;
 
-# check dirs and add archlib's if appropriate
-for my $libdir (@libdirs) {
-    die "$libdir isn't a directory\n"
-        unless -d $libdir;
+    # check dirs and add archlib's if appropriate
+    for my $libdir (@libdirs) {
+        die "$libdir isn't a directory\n"
+            unless -d $libdir;
 
-    my $archdir = "$libdir/$Config{archname}";
-    if (-d $archdir) {
-        unshift @libdirs, $archdir
-            unless grep { $_ eq $archdir } @libdirs;
+        my $archdir = "$libdir/$Config{archname}";
+        if (-d $archdir) {
+            unshift @libdirs, $archdir
+                unless grep { $_ eq $archdir } @libdirs;
+        }
     }
-}
 
-my @installed_releases = determine_installed_releases(@libdirs);
-write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
+    my @installed_releases = determine_installed_releases(@libdirs);
+    write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
 
-warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
-    (time-$^T)/60, $metacpan_calls;
+    warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
+        (time-$^T)/60, $metacpan_calls;
 
 
-do_makecpan(@installed_releases)
-    if $opt_makecpan;
+    do_makecpan(@installed_releases)
+        if $opt_makecpan;
 
-exit $major_error_count;
+    exit $major_error_count;
 }
 
 
@@ -425,7 +416,7 @@ sub determine_installed_releases {
         # of the module file can't be the origin of that module file.
         # (assuming clocks and file times haven't been messed with)
 
-        try {
+        eval {
             my $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size);
             if (not %$ccdr) {
                 $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, 0);
@@ -458,9 +449,9 @@ sub determine_installed_releases {
                 }
             }
             $mi->{candidate_cpan_dist_releases} = $ccdr if %$ccdr;
-        }
-        catch {
-            warn "Failed get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size): $_";
+        };
+        if ($@) {
+            warn "Failed get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size): $@";
         }
 
     }
@@ -586,7 +577,9 @@ sub determine_installed_releases {
                 = @{$_->{dist}}{qw(author distribution release)};
 
             $metacpan_calls++;
-            my $release_data = $metacpan_api->release( author => $author, release => $release );
+            my $response = $ua->get("http://api.metacpan.org/v0/release/$author/$release");
+            die $response->status_line unless $response->is_success;
+            my $release_data = decode_json $response->decoded_content;
             if (!$release_data) {
                 warn "Can't find release details for $author/$release - SKIPPED!\n";
                 next; # XXX could fake some of $release_data instead
@@ -697,14 +690,25 @@ sub get_candidate_cpan_dist_releases {
     # XXX doesn't cope with odd cases like 
     # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
     $metacpan_calls++;
-    my $results = $metacpan_api->post("file", {
+
+    my $query = {
         "size" => $metacpan_size,
         "query" =>  { "filtered" => {
             "filter" => {"and" => \@and_quals },
             "query" => {"match_all" => {}},
         }},
-        "fields" => [qw(release _parent author version version_numified file.module.version file.module.version_numified date stat.mtime distribution)]
-    });
+        "fields" => [qw(
+            release _parent author version version_numified file.module.version 
+            file.module.version_numified date stat.mtime distribution file.path
+            )]
+    };
+    my $response = $ua->post(
+        'http://api.metacpan.org/v0/file',
+        Content_Type => 'application/json',
+        Content => to_json( $query, { canonical => 1 } ),
+    );
+    die $response->status_line unless $response->is_success;
+    my $results = decode_json $response->decoded_content;
 
     my $hits = $results->{hits}{hits};
     die "get_candidate_cpan_dist_releases($module, $version, $file_size): too many results (>$metacpan_size)"
@@ -761,14 +765,23 @@ sub get_candidate_cpan_dist_releases_fallback {
 
     # XXX doesn't cope with odd cases like 
     $metacpan_calls++;
-    my $results = $metacpan_api->post("file", {
+    my $query = {
         "size" => $metacpan_size,
         "query" =>  { "filtered" => {
             "filter" => {"and" => \@and_quals },
             "query" => {"match_all" => {}},
         }},
-        "fields" => [qw(release _parent author version version_numified file.module.version file.module.version_numified date stat.mtime distribution)]
-    });
+        "fields" => [qw(
+            release _parent author version version_numified file.module.version 
+            file.module.version_numified date stat.mtime distribution file.path)]
+    };
+    my $response = $ua->post(
+        'http://api.metacpan.org/v0/file',
+        Content_Type => 'application/json',
+        Content => to_json( $query, { canonical => 1 } ),
+    );
+    die $response->status_line unless $response->is_success;
+    my $results = decode_json $response->decoded_content;
 
     my $hits = $results->{hits}{hits};
     die "get_candidate_cpan_dist_releases_fallback($module, $version): too many results (>$metacpan_size)"
@@ -803,18 +816,27 @@ sub get_module_versions_in_release {
     my ($author, $release) = @_;
 
     $metacpan_calls++;
-    my $results = eval { $metacpan_api->post("file", {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => {"and" => [
-                {"term" => {"release" => $release }},
-                {"term" => {"author" => $author }},
-                {"term" => {"mime" => "text/x-script.perl-module"}},
-            ]},
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => ["path","name","_source.module", "_source.stat.size"],
-    }) };
+    my $results = eval { 
+        my $query = {
+            "size" => $metacpan_size,
+            "query" =>  { "filtered" => {
+                "filter" => {"and" => [
+                    {"term" => {"release" => $release }},
+                    {"term" => {"author" => $author }},
+                    {"term" => {"mime" => "text/x-script.perl-module"}},
+                ]},
+                "query" => {"match_all" => {}},
+            }},
+            "fields" => ["path","name","_source.module", "_source.stat.size"],
+        }; 
+        my $response = $ua->post(
+            'http://api.metacpan.org/v0/file',
+            Content_Type => 'application/json',
+            Content => to_json( $query, { canonical => 1 } ),
+        );
+        die $response->status_line unless $response->is_success;
+        decode_json $response->decoded_content;
+    };
     if (not $results) {
         warn "Failed get_module_versions_in_release for $author/$release: $@";
         return {};
@@ -1123,3 +1145,5 @@ sub distname_info_from_url {
     my $di = CPAN::DistnameInfo->new($url);
     return $di;
 }
+
+1;
