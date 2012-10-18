@@ -1,13 +1,13 @@
 Changes
 LICENSE
 MANIFEST
+MANIFEST.SKIP
 META.json
 META.yml
 Makefile.PL
 README
 bin/dist_surveyor
 dist.ini
-dist_surveyor-2.db
 fatpackit.sh
 lib/Dist/Surveyor.pm
 lib/Dist/Surveyor/DB_File.pm
