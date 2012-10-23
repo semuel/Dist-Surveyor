@@ -30,41 +30,18 @@
       "runtime" : {
          "requires" : {
             "CPAN::DistnameInfo" : "0",
-            "Carp" : "0",
             "Compress::Zlib" : "0",
-            "Config" : "0",
-            "DBI" : "0",
-            "DB_File" : "0",
-            "Data::Dumper" : "0",
             "Digest::SHA" : "0",
-            "Fcntl" : "0",
-            "File::Basename" : "0",
-            "File::Fetch" : "0",
-            "File::Find" : "0",
-            "File::Path" : "0",
-            "File::Slurp" : "0",
-            "File::Spec" : "0",
-            "File::Spec::Unix" : "0",
-            "Getopt::Long" : "0",
             "JSON" : "0",
             "LWP::UserAgent" : "0",
-            "List::Util" : "0",
-            "Memoize" : "0",
             "Module::CoreList" : "0",
             "Module::Metadata" : "0",
-            "Storable" : "0",
-            "URI" : "0",
-            "base" : "0",
-            "constant" : "0",
             "perl" : "5.006",
-            "strict" : "0",
-            "version" : "0",
-            "warnings" : "0"
+            "version" : "0"
          }
       },
       "test" : {
          "requires" : {
-            "File::Temp" : "0",
             "Test::More" : "0.88"
          }
       }
@@ -78,6 +55,6 @@
          "web" : "https://github.com/semuel/Dist-Surveyor"
       }
    },
-   "version" : "0.004"
+   "version" : "1"
 }
 
