@@ -2,6 +2,8 @@ Revision history for Dist-Surveyor
 
 {{$NEXT}}
 
+1         2012-10-24 14:41:01 Asia/Tokyo
+
 0.004     2012-10-18 13:40:39 Asia/Tokyo
 	adding MANIFEST.SKIP
 	created a private wrapper for DB_File, for storing Perl hashs
