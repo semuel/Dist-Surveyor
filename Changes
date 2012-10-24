@@ -3,10 +3,18 @@ Revision history for Dist-Surveyor
 {{$NEXT}}
 
 0.004     2012-10-18 13:40:39 Asia/Tokyo
+	adding MANIFEST.SKIP
+	created a private wrapper for DB_File, for storing Perl hashs
+	reducing dependecies
 
 0.003     2012-10-10 13:53:57 Asia/Tokyo
+	change db file lock system to support windows
 
 0.002     2012-10-03 17:42:13 Asia/Tokyo
+	don't die if there is not perllocal.pod available
+	SiePerl now have 5.8 version - got to catch them all
+	Middleware-RequestHeaders-0.03 included a lot of modules in his local-lib directory
+	clarifing warning wording about modules that are laready core in Perl
 
 0.001     2011-11-17 13:00:29 Europe/Dublin
     -

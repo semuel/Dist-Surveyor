@@ -14,29 +14,25 @@ use strict;
 use warnings;
 
 use version;
-use Carp;
+use Carp; # core
 use Compress::Zlib;
-use Config;
+use Config; # core
 use CPAN::DistnameInfo;
-use Data::Dumper;
-use DBI qw(looks_like_number);
+use Data::Dumper; # core
+use DBI qw(looks_like_number); # core
 use Digest::SHA qw(sha1_base64);
-use Fcntl qw(:DEFAULT :flock);
-use File::Fetch;
-use File::Basename;
-use File::Find;
-use File::Path;
-use File::Slurp;
-use File::Spec;
-use Getopt::Long;
-use List::Util qw(max sum);
+use Fcntl qw(:DEFAULT :flock); # core
+use File::Basename qw{dirname};  # core
+use File::Find;  # core
+use File::Path; # core
+use File::Spec; # core
+use Getopt::Long; # core
+use List::Util qw(max sum); # core
 use LWP::UserAgent;
-use Memoize;
-use Dist::Surveyor::DB_File;
+use Memoize; # core
+use Dist::Surveyor::DB_File; # internal
 use Module::CoreList;
 use Module::Metadata;
-# use Storable qw(nfreeze);
-use URI;
 use JSON;
 
 use constant PROGNAME => 'dist_surveyor';
@@ -164,7 +160,7 @@ sub do_makecpan {
 
         # --- get the file
 
-        my $main_url = URI->new($ri->{download_url});
+        my $main_url = $ri->{download_url};
         my $di = distname_info_from_url($main_url);
         my $pathfile = "authors/id/".$di->pathname;
         my $destfile = "$opt_makecpan/$pathfile";
@@ -993,6 +989,7 @@ sub find_installed_modules {
 
                         ### ignore files that don't contain a matching package declaration
                         ### warn about those that do contain some kind of package declaration
+                        #use File::Slurp;
                         #my $content = read_file($File::Find::name);
                         #unless ( $content =~ m/^ \s* package \s+ (\#.*\n\s*)? $mod \b/xm ) {
                         #warn "No 'package $mod' seen in $File::Find::name\n"
