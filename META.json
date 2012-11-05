@@ -31,7 +31,6 @@
          "requires" : {
             "CPAN::DistnameInfo" : "0",
             "Compress::Zlib" : "0",
-            "Digest::SHA" : "0",
             "JSON" : "0",
             "LWP::UserAgent" : "0",
             "Module::CoreList" : "0",
@@ -55,6 +54,6 @@
          "web" : "https://github.com/semuel/Dist-Surveyor"
       }
    },
-   "version" : "0.005"
+   "version" : "1"
 }
 

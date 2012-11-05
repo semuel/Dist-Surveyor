@@ -26,14 +26,13 @@ my %WriteMakefileArgs = (
   "PREREQ_PM" => {
     "CPAN::DistnameInfo" => 0,
     "Compress::Zlib" => 0,
-    "Digest::SHA" => 0,
     "JSON" => 0,
     "LWP::UserAgent" => 0,
     "Module::CoreList" => 0,
     "Module::Metadata" => 0,
     "version" => 0
   },
-  "VERSION" => "0.005",
+  "VERSION" => 1,
   "test" => {
     "TESTS" => "t/*.t"
   }
