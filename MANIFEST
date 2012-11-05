@@ -8,7 +8,6 @@ Makefile.PL
 README
 bin/dist_surveyor
 dist.ini
-fatpacker.trace
 fatpackit.sh
 lib/Dist/Surveyor.pm
 lib/Dist/Surveyor/DB_File.pm
