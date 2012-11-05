@@ -15,12 +15,10 @@ use warnings;
 
 use version;
 use Carp; # core
-use Compress::Zlib;
 use Config; # core
 use CPAN::DistnameInfo;
 use Data::Dumper; # core
 use DBI qw(looks_like_number); # core
-use Digest::SHA qw(sha1_base64);
 use Fcntl qw(:DEFAULT :flock); # core
 use File::Basename qw{dirname};  # core
 use File::Find;  # core
@@ -87,18 +85,15 @@ if (not $opt_uncached) {
     tie %memoize_cache => 'Dist::Surveyor::DB_File', $memoize_file, O_CREAT|O_RDWR, 0640
         or die "Unable to use persistent cache: $!";
 }
-my %memoize_subs = (
-    get_candidate_cpan_dist_releases => { generation => 1 },
-    get_module_versions_in_release   => { generation => 1 },
+my @memoize_subs = qw(
+    get_candidate_cpan_dist_releases
+    get_module_versions_in_release
 );
-for my $subname (keys %memoize_subs) {
-    my %memoize_args = %{$memoize_subs{$subname}};
-    my $generation = delete $memoize_args{generation} || 1;
-    $memoize_args{SCALAR_CACHE} = [ HASH => \%memoize_cache ];
-    $memoize_args{LIST_CACHE}   = 'FAULT';
-    # TODO use faster normalizer for subs that don't get refs
-    # not needed because we don't pass refs
-    #$memoize_args{NORMALIZER} = sub { $Storable::canonical = 1; sha1_base64(nfreeze([ $subname, $generation, wantarray, @_ ])) }
+for my $subname (@memoize_subs) {
+    my %memoize_args = (
+        SCALAR_CACHE => [ HASH => \%memoize_cache ],
+        LIST_CACHE   => 'FAULT',
+    );
     memoize($subname, %memoize_args);
 }
 
@@ -151,6 +146,7 @@ sub main {
 
 sub do_makecpan {
     my (@installed_releases) = @_;
+    require Compress::Zlib;
 
     warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
     mkpath("$opt_makecpan/modules");
@@ -305,7 +301,7 @@ sub do_makecpan {
     close $rel_fh;
 
     # dump the primary result data for additional info and debugging
-    my $gzwrite = gzopen("$survey_datadump_dir/_data_dump.perl.gz", 'wb')
+    my $gzwrite = Compress::Zlib::gzopen("$survey_datadump_dir/_data_dump.perl.gz", 'wb')
         or croak "Cannot open $survey_datadump_dir/_data_dump.perl.gz for writing: $gzerrno";
     $gzwrite->gzwrite("[\n");
     for my $ri (@installed_releases) {
@@ -1065,7 +1061,7 @@ sub _readpkgs {
     my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
     return [] if not -f $packages_file;
 
-    my $gzread = gzopen($packages_file, 'rb')
+    my $gzread = Compress::Zlib::gzopen($packages_file, 'rb')
         or croak "Cannot open $packages_file: $gzerrno\n";
 
     my $inheader = 1;
@@ -1090,7 +1086,7 @@ sub _writepkgs {
     my ($cpandir, $pkgs) = @_;
 
     my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
-    my $gzwrite = gzopen($packages_file, 'wb')
+    my $gzwrite = Compress::Zlib::gzopen($packages_file, 'wb')
         or croak "Cannot open $packages_file for writing: $gzerrno";
     
     $gzwrite->gzwrite( "File:         02packages.details.txt\n" );
