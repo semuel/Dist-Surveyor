@@ -302,7 +302,7 @@ sub do_makecpan {
 
     # dump the primary result data for additional info and debugging
     my $gzwrite = Compress::Zlib::gzopen("$survey_datadump_dir/_data_dump.perl.gz", 'wb')
-        or croak "Cannot open $survey_datadump_dir/_data_dump.perl.gz for writing: $gzerrno";
+        or croak "Cannot open $survey_datadump_dir/_data_dump.perl.gz for writing: " . $Compress::Zlib::gzerrno;
     $gzwrite->gzwrite("[\n");
     for my $ri (@installed_releases) {
         $gzwrite->gzwrite(Dumper($ri));
@@ -1062,7 +1062,7 @@ sub _readpkgs {
     return [] if not -f $packages_file;
 
     my $gzread = Compress::Zlib::gzopen($packages_file, 'rb')
-        or croak "Cannot open $packages_file: $gzerrno\n";
+        or croak "Cannot open $packages_file: " . $Compress::Zlib::gzerrno . "\n";
 
     my $inheader = 1;
     my @packages;
@@ -1087,7 +1087,7 @@ sub _writepkgs {
 
     my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
     my $gzwrite = Compress::Zlib::gzopen($packages_file, 'wb')
-        or croak "Cannot open $packages_file for writing: $gzerrno";
+        or croak "Cannot open $packages_file for writing: " . $Compress::Zlib::gzerrno;
     
     $gzwrite->gzwrite( "File:         02packages.details.txt\n" );
     $gzwrite->gzwrite(
