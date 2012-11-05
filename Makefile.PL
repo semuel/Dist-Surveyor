@@ -32,7 +32,7 @@ my %WriteMakefileArgs = (
     "Module::Metadata" => 0,
     "version" => 0
   },
-  "VERSION" => 1,
+  "VERSION" => "0.006",
   "test" => {
     "TESTS" => "t/*.t"
   }
