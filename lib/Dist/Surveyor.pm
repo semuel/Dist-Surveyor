@@ -1,6 +1,6 @@
 package Dist::Surveyor;
 {
-  $Dist::Surveyor::VERSION = '1';
+  $Dist::Surveyor::VERSION = '0.007';
 }
 
 =head1 NAME
@@ -9,7 +9,7 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 VERSION
 
-version 1
+version 0.007
 
 =head1 SYNOPSIS
 

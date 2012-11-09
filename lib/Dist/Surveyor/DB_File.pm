@@ -1,6 +1,6 @@
 package Dist::Surveyor::DB_File;
 {
-  $Dist::Surveyor::DB_File::VERSION = '1';
+  $Dist::Surveyor::DB_File::VERSION = '0.007';
 }
 use base 'DB_File';
 use Storable qw(freeze thaw);
