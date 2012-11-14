@@ -25,7 +25,7 @@ use Carp; # core
 use Config; # core
 use CPAN::DistnameInfo;
 use Data::Dumper; # core
-use DBI qw(looks_like_number); # core
+use Scalar::Util qw(looks_like_number); # core
 use Fcntl qw(:DEFAULT :flock); # core
 use File::Basename qw{dirname};  # core
 use File::Find;  # core
