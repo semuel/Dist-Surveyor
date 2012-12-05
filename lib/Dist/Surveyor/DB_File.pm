@@ -4,15 +4,14 @@ package Dist::Surveyor::DB_File;
 }
 use strict;
 use warnings;
-
-use base 'DB_File';
 use Storable qw(freeze thaw);
 
 our @ISA;
-if (eval {require DB_file; 1}) {
-    @ISA = ('DB_file');
+if    (eval { require DB_File;   1; }) {
+    @ISA = ('DB_File');
+
 }
-elsif (eval {require SDBM_File; 1}) {
+elsif (eval { require SDBM_File; 1; }) {
     @ISA = ('SDBM_File');
 }
 else {
