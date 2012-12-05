@@ -9,7 +9,7 @@ use base 'DB_File';
 use Storable qw(freeze thaw);
 
 our @ISA;
-if (0 && eval {require DB_file; 1}) {
+if (eval {require DB_file; 1}) {
     @ISA = ('DB_file');
 }
 elsif (eval {require SDBM_File; 1}) {
