@@ -1,9 +1,23 @@
 package Dist::Surveyor::DB_File;
 {
-  $Dist::Surveyor::DB_File::VERSION = '0.007';
+  $Dist::Surveyor::DB_File::VERSION = '0.008';
 }
+use strict;
+use warnings;
+
 use base 'DB_File';
 use Storable qw(freeze thaw);
+
+our @ISA;
+if (0 && eval {require DB_file; 1}) {
+    @ISA = ('DB_file');
+}
+elsif (eval {require SDBM_File; 1}) {
+    @ISA = ('SDBM_File');
+}
+else {
+    die "Need either DB_file or SDBM_File installed to run";
+}
 
 # DB_File can store only strings as values, and not Perl structures
 # this small wrapper fixes the problem
