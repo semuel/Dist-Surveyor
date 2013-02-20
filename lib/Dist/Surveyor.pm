@@ -1,6 +1,6 @@
 package Dist::Surveyor;
 {
-  $Dist::Surveyor::VERSION = '0.008';
+  $Dist::Surveyor::VERSION = '0.009';
 }
 
 =head1 NAME
@@ -9,7 +9,7 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 VERSION
 
-version 0.008
+version 0.009
 
 =head1 SYNOPSIS
 
@@ -34,6 +34,7 @@ use File::Spec; # core
 use Getopt::Long; # core
 use List::Util qw(max sum); # core
 use LWP::UserAgent;
+use LWP::Simple qw{is_error};
 use Memoize; # core
 use Dist::Surveyor::DB_File; # internal
 use Module::CoreList;

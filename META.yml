@@ -31,4 +31,4 @@ requires:
 resources:
   homepage: https://github.com/semuel/Dist-Surveyor
   repository: https://github.com/semuel/Dist-Surveyor.git
-version: 0.008
+version: 0.009
