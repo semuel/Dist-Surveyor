@@ -27,6 +27,7 @@ use File::Spec; # core
 use Getopt::Long; # core
 use List::Util qw(max sum); # core
 use LWP::UserAgent;
+use LWP::Simple qw{is_error};
 use Memoize; # core
 use Dist::Surveyor::DB_File; # internal
 use Module::CoreList;
