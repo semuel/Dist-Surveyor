@@ -30,6 +30,7 @@ use LWP::UserAgent;
 use LWP::Simple qw{is_error};
 use Memoize; # core
 use Dist::Surveyor::DB_File; # internal
+use Dist::Surveyor::Tools qw{write_fields $distro_key_mod_names}; # internal
 use Module::CoreList;
 use Module::Metadata;
 use JSON;
@@ -98,21 +99,6 @@ for my $subname (@memoize_subs) {
     memoize($subname, %memoize_args);
 }
 
-
-
-# for distros with names that don't match the principle module name
-# yet the principle module version always matches the distro
-# Used for perllocal.pod lookups and for picking 'token packages' for minicpan
-# # XXX should be automated lookup rather than hardcoded (else remove perllocal.pod parsing)
-my %distro_key_mod_names = (
-    'PathTools' => 'File::Spec',
-    'Template-Toolkit' => 'Template',
-    'TermReadKey' => 'Term::ReadKey',
-    'libwww-perl' => 'LWP',
-    'ack' => 'App::Ack',
-);
-
-
 sub main {
 
     die "Usage: $0 perl-lib-directory [...]\n"
@@ -138,211 +124,20 @@ sub main {
         (time-$^T)/60, $metacpan_calls;
 
 
-    do_makecpan(@installed_releases)
-        if $opt_makecpan;
+    if ($opt_makecpan) {
+        require Dist::Surveyor::MakeCpan;
+        my $cpan = Dist::Surveyor::MakeCpan->new($opt_makecpan, PROGNAME, $opt_verbose);
+
+        warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
+
+        for my $ri (@installed_releases) {
+            $cpan->add_release($ri);
+        }
+        $cpan->close();
+    }
 
     exit $major_error_count;
 }
-
-
-sub do_makecpan {
-    my (@installed_releases) = @_;
-    require Compress::Zlib;
-
-    warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
-    mkpath("$opt_makecpan/modules");
-
-    my %pkg_ver_rel;    # for 02packages
-    for my $ri (@installed_releases) {
-
-        # --- get the file
-
-        my $main_url = $ri->{download_url};
-        my $di = distname_info_from_url($main_url);
-        my $pathfile = "authors/id/".$di->pathname;
-        my $destfile = "$opt_makecpan/$pathfile";
-        mkpath(dirname($destfile));
-
-        my @urls = ($main_url);
-        for my $mirror ('http://backpan.perl.org') {
-            push @urls, "$mirror/$pathfile";
-        }
-
-        my $mirror_status;
-        for my $url (@urls) {
-            $mirror_status = eval { mirror($url, $destfile) };
-            last if not is_error($mirror_status||500);
-        }
-        if ($@ || is_error($mirror_status)) {
-            my $err = ($@ and chomp $@) ? $@ : $mirror_status;
-            my $msg = "Error $err mirroring $main_url";
-            if (-f $destfile) {
-                warn "$msg - using existing file\n";
-            }
-            else {
-                # better to keep going and add the packages to the index
-                # than abort at this stage due to network/mirror problems
-                # the user can drop the files in later
-                warn "$msg - continuing, ADD FILE MANUALLY!\n";
-                ++$major_error_count;
-            }
-        }
-        else {
-            warn "$mirror_status $main_url\n" if $opt_verbose;
-        }
-
-
-        my $mods_in_rel = get_module_versions_in_release($ri->{author}, $ri->{name});
-
-        if (!keys %$mods_in_rel) { # XXX hack for common::sense
-            (my $dist_as_pkg = $ri->{distribution}) =~ s/-/::/g;
-            warn "$ri->{author}/$ri->{name} has no modules! Adding fake module $dist_as_pkg ".$di->version."\n";
-            $mods_in_rel->{$dist_as_pkg} = {
-                name => $dist_as_pkg,
-                version => $di->version,
-                version_obj => version->parse($di->version),
-            };
-        }
-
-
-        # --- accumulate package info for 02packages file
-
-        for my $pkg (sort keys %$mods_in_rel ) {
-            # pi => { name=>, version=>, version_obj=> }
-            my $pi = $mods_in_rel->{$pkg};
-
-            # for selecting which dist a package belongs to
-            # XXX should factor in authorization status
-            my $p_r_match_score = p_r_match_score($pkg, $ri);
-
-            if (my $pvr = $pkg_ver_rel{$pkg}) {
-                # already seen same package name in different distribution
-                if ($p_r_match_score < $pvr->{p_r_match_score}) {
-                    warn "$pkg seen in $pvr->{ri}{name} so ignoring one in $ri->{name}\n";
-                    next;
-                }
-                warn "$pkg seen in $pvr->{ri}{name} - now overridden by $ri->{name}\n";
-            }
-
-            my $line = _fmtmodule($pkg, $di->pathname, $pi->{version});
-            $pkg_ver_rel{$pkg} = { line => $line, pi => $pi, ri => $ri, p_r_match_score => $p_r_match_score };
-        }
-
-    }
-
-
-    # --- write 02packages file
-
-    my $pkg_lines = _readpkgs($opt_makecpan);
-    my %packages;
-    for my $line (@$pkg_lines, map { $_->{line} } values %pkg_ver_rel) {
-        my ($pkg) = split(/\s+/, $line, 2);
-        if ($packages{$pkg} and $packages{$pkg} ne $line) {
-            warn "Old $packages{$pkg}\nNew $line\n" if $opt_verbose;
-        }
-        $packages{$pkg} = $line;
-    };
-    _writepkgs($opt_makecpan, [ sort values %packages ] );
-
-
-    # --- write extra data files that may be useful XXX may change
-    # XXX these don't all (yet?) merge with existing data
-    my $survey_datadump_dir = "$opt_makecpan/".PROGNAME;
-    mkpath($survey_datadump_dir);
-
-    # Write list of token packages - each should match only one release.
-    # This makes it _much_ faster to do installs via cpanm because it
-    # can skip the modules it knows are installed (whereas using a list of
-    # distros it has to reinstall _all_ of them every time).
-    # XXX maybe add as a separate option: "--mainpkgs mainpkgs.lst"
-    my %dist_packages;
-    while ( my ($pkg, $line) = each %packages) {
-        my $distpath = (split /\s+/, $line)[2];
-        $dist_packages{$distpath}{$pkg}++;
-    }
-    my %token_package;
-    my %token_package_pri = (       # alter install order for some modules
-        'Module::Build' => 100,     # should be near first
-        Moose => 50,
-
-        # install distros that use Module::Install late so their dependencies
-        # have already been resolved (else they try to fetch them directly,
-        # bypassing our cpanm --mirror-only goal)
-        'Olson::Abbreviations' => -90,
-
-        # distros with special needs
-        'Term::ReadKey' => -100,    # tests hang if run in background
-    );
-    for my $distpath (sort keys %dist_packages) {
-        my $dp = $dist_packages{$distpath};
-        my $di = CPAN::DistnameInfo->new($distpath);
-        #warn Dumper([ $distpath, $di->dist, $di]);
-        (my $token_pkg = $di->dist) =~ s/-/::/g;
-        if (!$dp->{$token_pkg}) {
-            if (my $keypkg = $distro_key_mod_names{$di->dist}) {
-                $token_pkg = $keypkg;
-            }
-            else {
-                # XXX not good - may pick a dummy test package
-                $token_pkg = (grep { $_ } keys %$dp)[0] || $token_pkg;
-                warn "Picked $token_pkg as token package for ".$di->distvname."\n";
-            }
-        }
-        $token_package{$token_pkg} = $token_package_pri{$token_pkg} || 0;
-    }
-
-    my @main_pkgs = sort { $token_package{$b} <=> $token_package{$a} or $a cmp $b } keys %token_package;
-    open my $key_pkg_fh, ">", "$survey_datadump_dir/token_packages.txt";
-    print $key_pkg_fh "$_\n" for @main_pkgs;
-    close $key_pkg_fh;
-
-    # Write list of releases, like default stdout
-    open my $rel_fh, ">", "$survey_datadump_dir/releases.txt";
-    write_fields(\@installed_releases, undef, [qw(url)], $rel_fh);
-    close $rel_fh;
-
-    # dump the primary result data for additional info and debugging
-    my $gzwrite = Compress::Zlib::gzopen("$survey_datadump_dir/_data_dump.perl.gz", 'wb')
-        or croak "Cannot open $survey_datadump_dir/_data_dump.perl.gz for writing: " . $Compress::Zlib::gzerrno;
-    $gzwrite->gzwrite("[\n");
-    for my $ri (@installed_releases) {
-        $gzwrite->gzwrite(Dumper($ri));
-        $gzwrite->gzwrite(",");
-    }
-    $gzwrite->gzwrite("]\n");
-    $gzwrite->gzclose;
-
-    warn "$opt_makecpan updated.\n"
-}
-
-
-
-sub p_r_match_score {
-    my ($pkg_name, $ri) = @_;
-    my @p = split /\W/, $pkg_name;
-    my @r = split /\W/, $ri->{name};
-    for my $i (0..max(scalar @p, scalar @r)) {
-        return $i if not defined $p[$i]
-                  or not defined $r[$i]
-                  or $p[$i] ne $r[$i]
-    }
-    die; # unreached
-}
-
-
-sub write_fields {
-    my ($releases, $format, $fields, $fh) = @_;
-
-    $format ||= join("\t", ('%s') x @$fields);
-    $format .= "\n";
-
-    for my $release_data (@$releases) {
-        printf $fh $format, map {
-            exists $release_data->{$_} ? $release_data->{$_} : "?$_"
-        } @$fields;
-    }
-}
-
 
 sub determine_installed_releases {
     my (@search_dirs) = @_;
@@ -1012,7 +807,7 @@ sub perllocal_distro_mod_version {
     my ($distname, $perllocalpod) = @_;
 
     ( my $dist_mod_name = $distname ) =~ s/-/::/g;
-    my $key_mod_name = $distro_key_mod_names{$distname} || $dist_mod_name;
+    my $key_mod_name = $distro_key_mod_names->{$distname} || $dist_mod_name;
 
     our $perllocal_distro_mod_version;
     if (not $perllocal_distro_mod_version) { # initial setup
@@ -1051,86 +846,6 @@ sub module_progress_indicator {
         warn "\t$crnt...\n";
         $last = $crnt;
     }
-}
-
-
-# copied from CPAN::Mini::Inject and hacked
-
-sub _readpkgs {
-    my ($cpandir) = @_;
-
-    my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
-    return [] if not -f $packages_file;
-
-    my $gzread = Compress::Zlib::gzopen($packages_file, 'rb')
-        or croak "Cannot open $packages_file: " . $Compress::Zlib::gzerrno . "\n";
-
-    my $inheader = 1;
-    my @packages;
-    my $package;
-
-    while ( $gzread->gzreadline( $package ) ) {
-        if ( $inheader ) {
-            $inheader = 0 unless $package =~ /\S/;
-            next;
-        }
-        chomp $package;
-        push @packages, $package;
-    }
-
-    $gzread->gzclose;
-
-    return \@packages;
-}
-
-sub _writepkgs {
-    my ($cpandir, $pkgs) = @_;
-
-    my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
-    my $gzwrite = Compress::Zlib::gzopen($packages_file, 'wb')
-        or croak "Cannot open $packages_file for writing: " . $Compress::Zlib::gzerrno;
-    
-    $gzwrite->gzwrite( "File:         02packages.details.txt\n" );
-    $gzwrite->gzwrite(
-        "URL:          http://www.perl.com/CPAN/modules/02packages.details.txt\n"
-    );
-    $gzwrite->gzwrite(
-        'Description:  Package names found in directory $CPAN/authors/id/'
-        . "\n" );
-    $gzwrite->gzwrite( "Columns:      package name, version, path\n" );
-    $gzwrite->gzwrite(
-        "Intended-For: Automated fetch routines, namespace documentation.\n"
-    );
-    $gzwrite->gzwrite( "Written-By:   $0 0.001\n" ); # XXX TODO
-    $gzwrite->gzwrite( "Line-Count:   " . scalar( @$pkgs ) . "\n" );
-    # Last-Updated: Sat, 19 Mar 2005 19:49:10 GMT
-    my @date = split( /\s+/, scalar( gmtime ) );
-    $gzwrite->gzwrite( "Last-Updated: $date[0], $date[2] $date[1] $date[4] $date[3] GMT\n\n" );
-    
-    $gzwrite->gzwrite( "$_\n" ) for ( @$pkgs );
-    
-    $gzwrite->gzclose;
-}
-
-sub _fmtmodule {
-    my ( $module, $file, $version ) = @_;
-    $version = "undef" if not defined $version;
-    my $fw = 38 - length $version;
-    $fw = length $module if $fw < length $module;
-    return sprintf "%-${fw}s %s  %s", $module, $version, $file;
-}
-
-sub first_word {
-    my $string = shift;
-    return ($string =~ m/^(\w+)/) ? $1 : $string;
-}
-
-sub distname_info_from_url {
-    my ($url) = @_;
-    $url =~ s{.* \b authors/id/ }{}x
-        or warn "No authors/ in '$url'\n";
-    my $di = CPAN::DistnameInfo->new($url);
-    return $di;
 }
 
 1;
