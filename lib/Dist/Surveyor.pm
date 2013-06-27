@@ -30,7 +30,6 @@ use LWP::UserAgent;
 use LWP::Simple qw{is_error};
 use Memoize; # core
 use Dist::Surveyor::DB_File; # internal
-use Dist::Surveyor::Tools qw{write_fields $distro_key_mod_names}; # internal
 use Module::CoreList;
 use Module::Metadata;
 use JSON;
@@ -42,6 +41,14 @@ use constant ON_VMS   => $^O eq 'VMS';
 if (ON_VMS) {
     require File::Spec::Unix;
 }
+
+my $distro_key_mod_names = {
+    'PathTools' => 'File::Spec',
+    'Template-Toolkit' => 'Template',
+    'TermReadKey' => 'Term::ReadKey',
+    'libwww-perl' => 'LWP',
+    'ack' => 'App::Ack',
+};
 
 GetOptions(
     'match=s' => \my $opt_match,
@@ -126,7 +133,8 @@ sub main {
 
     if ($opt_makecpan) {
         require Dist::Surveyor::MakeCpan;
-        my $cpan = Dist::Surveyor::MakeCpan->new($opt_makecpan, PROGNAME, $opt_verbose);
+        my $cpan = Dist::Surveyor::MakeCpan->new(
+            $opt_makecpan, PROGNAME, $distro_key_mod_names, $opt_verbose);
 
         warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
 
@@ -134,6 +142,7 @@ sub main {
             $cpan->add_release($ri);
         }
         $cpan->close();
+        $major_error_count += $cpan->errors();
     }
 
     exit $major_error_count;
@@ -845,6 +854,19 @@ sub module_progress_indicator {
     if ($last ne $crnt) {
         warn "\t$crnt...\n";
         $last = $crnt;
+    }
+}
+
+sub write_fields {
+    my ($releases, $format, $fields, $fh) = @_;
+
+    $format ||= join("\t", ('%s') x @$fields);
+    $format .= "\n";
+
+    for my $release_data (@$releases) {
+        printf $fh $format, map {
+            exists $release_data->{$_} ? $release_data->{$_} : "?$_"
+        } @$fields;
     }
 }
 

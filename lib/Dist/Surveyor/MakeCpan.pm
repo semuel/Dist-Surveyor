@@ -1,12 +1,11 @@
 package Dist::Surveyor::MakeCpan;
 use strict;
 use warnings;
-use Dist::Surveyor::Tools qw{write_fields $distro_key_mod_names}; # internal
 use Carp; # core
 use Data::Dumper; # core
 
 sub new {
-    my ($class, $cpan_dir, $progname, $verbose) = @_;
+    my ($class, $cpan_dir, $progname, $irregularities, $verbose) = @_;
 
     require Compress::Zlib;
     mkpath("$cpan_dir/modules");
@@ -28,6 +27,7 @@ sub new {
     my $self = {
         errors => 0,
         cpan_dir => $cpan_dir,
+        irregularities => $irregularities,
         verbose => $verbose,
         pkg_ver_rel => {}, # for 02packages
         progname => $progname,
@@ -84,7 +84,7 @@ sub close {
         #warn Dumper([ $distpath, $di->dist, $di]);
         (my $token_pkg = $di->dist) =~ s/-/::/g;
         if (!$dp->{$token_pkg}) {
-            if (my $keypkg = $distro_key_mod_names->{$di->dist}) {
+            if (my $keypkg = $self->{irregularities}->{$di->dist}) {
                 $token_pkg = $keypkg;
             }
             else {
@@ -186,7 +186,7 @@ sub add_release {
         $self->{pkg_ver_rel}->{$pkg} = { line => $line, pi => $pi, ri => $ri, p_r_match_score => $p_r_match_score };
     }
 
-    write_fields([ $ri ], undef, [qw(url)], $self->{rel_fh});
+    printf { $self->{rel_fh} } "%s\n", ( exists $ri->{url} ? $ri->{url} : "?url" );
 
     $self->{gzwrite}->gzwrite(Dumper($ri));
     $self->{gzwrite}->gzwrite(",");
@@ -279,5 +279,30 @@ sub _fmtmodule {
     return sprintf "%-${fw}s %s  %s", $module, $version, $file;
 }
 
+sub errors {
+    my $self = shift;
+    return $self->{errors};
+}
 
 1;
+
+=head1 NAME
+
+Dist::Surveyor::MakeCpan - Create a Mini-CPAN for the surveyed modules
+
+=head1 SYNOPSIS
+
+    use Dist::Surveyor::MakeCpan;
+    my $cpan = Dist::Surveyor::MakeCpan->new(
+            $cpan_dir, $progname, $irregularities, $verbose);
+    foreach my $rel (@releases) {
+        $cpan->add_release($rel);
+    }
+    $cpan->close();
+    say "There where ", $cpan->errors(), " errors";
+
+=head1 DESCRIPTION
+
+
+
+=cut
