@@ -303,6 +303,56 @@ Dist::Surveyor::MakeCpan - Create a Mini-CPAN for the surveyed modules
 
 =head1 DESCRIPTION
 
+Create a mini-CPAN for the surveyed modules, so you will be able to re-install 
+the same setup in a new computer.
 
+=head1 CONSTRUCTOR
+
+    my $cpan = Dist::Surveyor::MakeCpan->new(
+            $cpan_dir, $progname, $irregularities, $verbose);
+
+=over
+
+=item $cpan_dir
+
+The directory where the mini-cpan will be created
+
+=item $progname
+
+The name of the running program - will be used to create a subdirectory 
+inside $cpan_dir, that will contain debug information.
+
+=item $irregularities
+
+A hashref with a list of irregular named releases. i.e. 'libwww-perl' => 'LWP'.
+
+=item $verbose
+
+If true, will output to the STDERR a bit of debug information
+
+=back
+
+=head1 METHODS
+
+=head2 $cpan->add_release($rel)
+
+Add one release to the mini-cpan. the $rel should be a hashref, 
+and contain the following fields:
+
+    $rel = {
+        download_url => 'url',
+        url => 
+        author => 
+        name =>
+        distribution => 
+    }
+
+=head2 $cpan->close()
+
+Close the mini-CPAN, and close all the debug data dump files.
+
+=head1 License, Copyright
+
+Please see L<Dist::Surveyor> for details
 
 =cut
