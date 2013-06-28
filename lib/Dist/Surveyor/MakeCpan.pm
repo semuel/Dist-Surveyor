@@ -3,9 +3,19 @@ use strict;
 use warnings;
 use Carp; # core
 use Data::Dumper; # core
+use File::Path; # core
+use CPAN::DistnameInfo;
+use File::Basename qw{dirname};  # core
+use LWP::Simple qw{is_error};
+use LWP::UserAgent;
+use Dist::Surveyor::Inquiry;
+use List::Util qw(max); # core
+
+our $verbose;
+*verbose = \$::VERBOSE;
 
 sub new {
-    my ($class, $cpan_dir, $progname, $irregularities, $verbose) = @_;
+    my ($class, $cpan_dir, $progname, $irregularities) = @_;
 
     require Compress::Zlib;
     mkpath("$cpan_dir/modules");
@@ -28,7 +38,6 @@ sub new {
         errors => 0,
         cpan_dir => $cpan_dir,
         irregularities => $irregularities,
-        verbose => $verbose,
         pkg_ver_rel => {}, # for 02packages
         progname => $progname,
         rel_fh => $rel_fh,
@@ -47,7 +56,7 @@ sub close {
     for my $line (@$pkg_lines, map { $_->{line} } values %{ $self->{pkg_ver_rel} }) {
         my ($pkg) = split(/\s+/, $line, 2);
         if ($packages{$pkg} and $packages{$pkg} ne $line) {
-            warn "Old $packages{$pkg}\nNew $line\n" if $self->{verbose};
+            warn "Old $packages{$pkg}\nNew $line\n" if $verbose;
         }
         $packages{$pkg} = $line;
     };
@@ -146,7 +155,7 @@ sub add_release {
         }
     }
     else {
-        warn "$mirror_status $main_url\n" if $self->{verbose};
+        warn "$mirror_status $main_url\n" if $verbose;
     }
 
 
@@ -191,6 +200,15 @@ sub add_release {
     $self->{gzwrite}->gzwrite(Dumper($ri));
     $self->{gzwrite}->gzwrite(",");
 
+}
+
+# download the file in $url, into $destfile. 
+# returns requrest status code
+sub mirror {
+    my ($url, $destfile) = @_;
+    my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
+    my $response = $ua->get($url, ':content_file' => $destfile);
+    return $response->code();
 }
 
 sub p_r_match_score {
@@ -294,7 +312,7 @@ Dist::Surveyor::MakeCpan - Create a Mini-CPAN for the surveyed modules
 
     use Dist::Surveyor::MakeCpan;
     my $cpan = Dist::Surveyor::MakeCpan->new(
-            $cpan_dir, $progname, $irregularities, $verbose);
+            $cpan_dir, $progname, $irregularities);
     foreach my $rel (@releases) {
         $cpan->add_release($rel);
     }
@@ -326,10 +344,6 @@ inside $cpan_dir, that will contain debug information.
 
 A hashref with a list of irregular named releases. i.e. 'libwww-perl' => 'LWP'.
 
-=item $verbose
-
-If true, will output to the STDERR a bit of debug information
-
 =back
 
 =head1 METHODS
@@ -340,11 +354,11 @@ Add one release to the mini-cpan. the $rel should be a hashref,
 and contain the following fields:
 
     $rel = {
-        download_url => 'url',
-        url => 
-        author => 
-        name =>
-        distribution => 
+        download_url => 'http://cpan.metacpan.org/authors/id/S/SE/SEMUELF/Dist-Surveyor-0.009.tar.gz',
+        url => 'authors/id/S/SE/SEMUELF/Dist-Surveyor-0.009.tar.gz',
+        author => 'SEMUELF',
+        name => 'Dist-Surveyor-0.009',
+        distribution => 'Dist-Surveyor',
     }
 
 =head2 $cpan->close()

@@ -16,23 +16,15 @@ use warnings;
 use version;
 use Carp; # core
 use Config; # core
-use CPAN::DistnameInfo;
 use Data::Dumper; # core
 use Scalar::Util qw(looks_like_number); # core
-use Fcntl qw(:DEFAULT :flock); # core
-use File::Basename qw{dirname};  # core
 use File::Find;  # core
-use File::Path; # core
 use File::Spec; # core
 use Getopt::Long; # core
 use List::Util qw(max sum); # core
-use LWP::UserAgent;
-use LWP::Simple qw{is_error};
-use Memoize; # core
-use Dist::Surveyor::DB_File; # internal
+use Dist::Surveyor::Inquiry; # internal
 use Module::CoreList;
 use Module::Metadata;
-use JSON;
 
 use constant PROGNAME => 'dist_surveyor';
 use constant ON_WIN32 => $^O eq 'MSWin32';
@@ -70,41 +62,9 @@ GetOptions(
 $opt_verbose++ if $opt_debug;
 $opt_perlver = version->parse($opt_perlver || $])->numify;
 
+Dist::Surveyor::Inquiry->init_cache(!$opt_uncached);
+
 my $major_error_count = 0; # exit status
-
-# We have to limit the number of results when using MetaCPAN::API.
-# We can'r make it too large as it hurts the server (it preallocates)
-# but need to make it large enough for worst case distros (eg eBay-API).
-# TODO: switching to the ElasticSearch module, with cursor support, will
-# probably avoid the need for this. Else we could dynamically adjust.
-my $metacpan_size = 2500;
-my $metacpan_calls = 0;
-my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
-
-# caching via persistent memoize
-
-my $db_generation = 2; # XXX increment on incompatible change
-my $memoize_file = PROGNAME."-$db_generation.db";
-my %memoize_cache;
-my $locking_file;
-if (not $opt_uncached) {
-    open $locking_file, ">", "$memoize_file.lock" 
-        or die "Unable to open lock file: $!";
-    flock ($locking_file, LOCK_EX) || die "flock: $!";
-    tie %memoize_cache => 'Dist::Surveyor::DB_File', $memoize_file, O_CREAT|O_RDWR, 0640
-        or die "Unable to use persistent cache: $!";
-}
-my @memoize_subs = qw(
-    get_candidate_cpan_dist_releases
-    get_module_versions_in_release
-);
-for my $subname (@memoize_subs) {
-    my %memoize_args = (
-        SCALAR_CACHE => [ HASH => \%memoize_cache ],
-        LIST_CACHE   => 'FAULT',
-    );
-    memoize($subname, %memoize_args);
-}
 
 sub main {
 
@@ -123,6 +83,10 @@ sub main {
                 unless grep { $_ eq $archdir } @libdirs;
         }
     }
+
+    $::DEBUG = $opt_debug;
+    $::VERBOSE = $opt_verbose;
+    Dist::Surveyor::Inquiry->perma_cache();
 
     my @installed_releases = determine_installed_releases(@libdirs);
     write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
@@ -366,15 +330,9 @@ sub determine_installed_releases {
             my ($author, $distribution, $release)
                 = @{$_->{dist}}{qw(author distribution release)};
 
-            $metacpan_calls++;
-            my $response = $ua->get("http://api.metacpan.org/v0/release/$author/$release");
-            die $response->status_line unless $response->is_success;
-            my $release_data = decode_json $response->decoded_content;
-            if (!$release_data) {
-                warn "Can't find release details for $author/$release - SKIPPED!\n";
-                next; # XXX could fake some of $release_data instead
-            }
-
+            my $release_data = get_release_info($author, $release);
+            next unless $release_data;
+            
             # shortcuts
             (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
 
@@ -394,7 +352,6 @@ sub determine_installed_releases {
 
     return @installed_releases;
 }
-
 
 # pick_best_cpan_dist_release - memoized
 # for each %$ccdr adds a fraction_installed based on %$installed_mod_info
@@ -449,251 +406,6 @@ sub dist_fraction_installed {
 
     return $fraction_installed;
 }
-
-
-sub get_candidate_cpan_dist_releases {
-    my ($module, $version, $file_size) = @_;
-
-    $version = 0 if not defined $version; # XXX
-
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "file.module.version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "file.module.version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
-
-    my @and_quals = (
-        {"term" => {"file.module.name" => $module }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
-    );
-    push @and_quals, {"term" => {"file.stat.size" => $file_size }}
-        if $file_size;
-
-    # XXX doesn't cope with odd cases like 
-    # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
-    $metacpan_calls++;
-
-    my $query = {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => {"and" => \@and_quals },
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => [qw(
-            release _parent author version version_numified file.module.version 
-            file.module.version_numified date stat.mtime distribution file.path
-            )]
-    };
-    my $response = $ua->post(
-        'http://api.metacpan.org/v0/file',
-        Content_Type => 'application/json',
-        Content => to_json( $query, { canonical => 1 } ),
-    );
-    die $response->status_line unless $response->is_success;
-    my $results = decode_json $response->decoded_content;
-
-    my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases($module, $version, $file_size): too many results (>$metacpan_size)"
-        if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): ".Dumper($results)
-        if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
-
-    # filter out perl-like releases
-    @$hits = 
-        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
-        @$hits;
-
-    for my $hit (@$hits) {
-        $hit->{release_id} = delete $hit->{_parent};
-        # add version_obj for convenience (will fail and be undef for releases like "0.08124-TRIAL")
-        $hit->{fields}{version_obj} = eval { version->parse($hit->{fields}{version}) };
-    }
-
-    # we'll return { "Dist-Name-Version" => { details }, ... }
-    my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): @{[ sort keys %dists ]}\n"
-        if $opt_verbose;
-
-    return \%dists;
-}
-
-sub get_candidate_cpan_dist_releases_fallback {
-    my ($module, $version) = @_;
-
-    # fallback to look for distro of the same name as the module
-    # for odd cases like
-    # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
-    (my $distname = $module) =~ s/::/-/g;
-
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
-
-    my @and_quals = (
-        {"term" => {"distribution" => $distname }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
-    );
-
-    # XXX doesn't cope with odd cases like 
-    $metacpan_calls++;
-    my $query = {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => {"and" => \@and_quals },
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => [qw(
-            release _parent author version version_numified file.module.version 
-            file.module.version_numified date stat.mtime distribution file.path)]
-    };
-    my $response = $ua->post(
-        'http://api.metacpan.org/v0/file',
-        Content_Type => 'application/json',
-        Content => to_json( $query, { canonical => 1 } ),
-    );
-    die $response->status_line unless $response->is_success;
-    my $results = decode_json $response->decoded_content;
-
-    my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases_fallback($module, $version): too many results (>$metacpan_size)"
-        if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): ".Dumper($results)
-        if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
-
-    # filter out perl-like releases
-    @$hits = 
-        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
-        @$hits;
-
-    for my $hit (@$hits) {
-        $hit->{release_id} = delete $hit->{_parent};
-        # add version_obj for convenience (will fail and be undef for releases like "0.08124-TRIAL")
-        $hit->{fields}{version_obj} = eval { version->parse($hit->{fields}{version}) };
-    }
-
-    # we'll return { "Dist-Name-Version" => { details }, ... }
-    my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): @{[ sort keys %dists ]}\n"
-        if $opt_verbose;
-
-    return \%dists;
-}
-
-
-# this can be called for all sorts of releases that are only vague possibilities
-# and aren't actually installed, so generally it's quiet
-sub get_module_versions_in_release {
-    my ($author, $release) = @_;
-
-    $metacpan_calls++;
-    my $results = eval { 
-        my $query = {
-            "size" => $metacpan_size,
-            "query" =>  { "filtered" => {
-                "filter" => {"and" => [
-                    {"term" => {"release" => $release }},
-                    {"term" => {"author" => $author }},
-                    {"term" => {"mime" => "text/x-script.perl-module"}},
-                ]},
-                "query" => {"match_all" => {}},
-            }},
-            "fields" => ["path","name","_source.module", "_source.stat.size"],
-        }; 
-        my $response = $ua->post(
-            'http://api.metacpan.org/v0/file',
-            Content_Type => 'application/json',
-            Content => to_json( $query, { canonical => 1 } ),
-        );
-        die $response->status_line unless $response->is_success;
-        decode_json $response->decoded_content;
-    };
-    if (not $results) {
-        warn "Failed get_module_versions_in_release for $author/$release: $@";
-        return {};
-    }
-    my $hits = $results->{hits}{hits};
-    die "get_module_versions_in_release($author, $release): too many results"
-        if @$hits >= $metacpan_size;
-
-    my %modules_in_release;
-    for my $hit (@$hits) {
-        my $path = $hit->{fields}{path};
-
-        # XXX try to ignore files that won't get installed
-        # XXX should use META noindex!
-        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b!) {
-            warn "$author/$release: ignored non-installed module $path\n"
-                if $opt_debug;
-            next;
-        }
-
-        my $size = $hit->{fields}{"_source.stat.size"};
-        # files can contain more than one package ('module')
-        my $rel_mods = $hit->{fields}{"_source.module"} || [];
-        for my $mod (@$rel_mods) { # actually packages in the file
-
-            # Some files may contain multiple packages. We want to ignore
-            # all except the one that matches the name of the file.
-            # We use a fairly loose (but still very effective) test because we
-            # can't rely on $path including the full package name.
-            (my $filebasename = $hit->{fields}{name}) =~ s/\.pm$//;
-            if ($mod->{name} !~ m/\b$filebasename$/) {
-                warn "$author/$release: ignored $mod->{name} in $path\n"
-                    if $opt_debug;
-                next;
-            }
-
-            # warn if package previously seen in this release
-            # with a different version or file size
-            if (my $prev = $modules_in_release{$mod->{name}}) {
-                my $version_obj = eval { version->parse($mod->{version}) };
-                die "$author/$release: $mod $mod->{version}: $@" if $@;
-
-                if ($opt_verbose) {
-                    # XXX could add a show-only-once cache here
-                    my $msg = "$mod->{name} $mod->{version} ($size) seen in $path after $prev->{path} $prev->{version} ($prev->{size})";
-                    warn "$release: $msg\n"
-                        if ($version_obj != version->parse($prev->{version}) or $size != $prev->{size});
-                }
-            }
-
-            # keep result small as Storable thawing this is major runtime cost
-            # (specifically we avoid storing a version_obj here)
-            $modules_in_release{$mod->{name}} = {
-                name => $mod->{name},
-                path => $path,
-                version => $mod->{version},
-                size => $size,
-            };
-        }
-    }
-
-    warn "\n$author/$release contains: @{[ map { qq($_->{name} $_->{version}) } values %modules_in_release ]}\n"
-        if $opt_debug;
-
-    return \%modules_in_release;
-}
-
 
 sub get_file_mtime {
     my ($file) = @_;

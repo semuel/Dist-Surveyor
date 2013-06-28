@@ -5,3 +5,4 @@ blib
 .*.swp
 *.log
 dist_surveyor-*.db*
+t/testcpan
