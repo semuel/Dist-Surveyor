@@ -8,6 +8,40 @@ use Dist::Surveyor::DB_File; # internal
 use LWP::UserAgent;
 use JSON;
 
+=head1 NAME
+
+Dist::Surveyor::Inquiry - Handling the meta-cpan API access for Dist::Surveyor
+
+=head1 DESCRIPTION
+
+There are a few things that needed to be known in this module:
+
+=over
+
+=item *
+
+$metacpan_size - internally defined global to limit the maximum size of 
+every API call
+
+=item *
+
+$metacpan_calls - internally defined global counting how many API call happen.
+
+=item *
+
+This module checks $::DEBUG and $::VERBOSE for obvious proposes.
+
+=item *
+
+For initating cache-on-disk, call Dist::Surveyor::Inquiry->perma_cache()
+(this should be usually done, except in testing environment)
+
+=back
+
+=head1 FUNCTIONS
+
+=cut
+
 # We have to limit the number of results when using MetaCPAN::API.
 # We can'r make it too large as it hurts the server (it preallocates)
 # but need to make it large enough for worst case distros (eg eBay-API).
@@ -224,8 +258,27 @@ sub get_candidate_cpan_dist_releases_fallback {
     return \%dists;
 }
 
-# this can be called for all sorts of releases that are only vague possibilities
-# and aren't actually installed, so generally it's quiet
+=head2 get_module_versions_in_release($author, $release)
+
+Receive release info, such as:
+
+    get_module_versions_in_release('SEMUELF', 'Dist-Surveyor-0.009')
+
+And returns a hashref, that contains one entry for each module that exists 
+in the release. module information is the format:
+
+    'Dist::Surveyor' => {
+        'version' => '0.009',
+        'name' => 'Dist::Surveyor',
+        'path' => 'lib/Dist/Surveyor.pm',
+        'size' => 43879
+    },
+
+this function can be called for all sorts of releases that are only vague 
+possibilities and aren't actually installed, so generally it's quiet
+
+=cut
+
 sub get_module_versions_in_release {
     my ($author, $release) = @_;
 
@@ -317,5 +370,11 @@ sub get_module_versions_in_release {
 
     return \%modules_in_release;
 }
+
+=head1 License, Copyright
+
+Please see L<Dist::Surveyor> for details
+
+=cut
 
 1;

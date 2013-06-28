@@ -21,7 +21,7 @@ ok(-e $cpan_dir, "MiniCPAN directory created");
 
 my $rel = {
     download_url => 'http://cpan.metacpan.org/authors/id/S/SE/SEMUELF/Dist-Surveyor-0.009.tar.gz',
-    url => '',
+    url => 'authors/id/S/SE/SEMUELF/Dist-Surveyor-0.009.tar.gz',
     author => 'SEMUELF',
     name => 'Dist-Surveyor-0.009',
     distribution => 'Dist-Surveyor',

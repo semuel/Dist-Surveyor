@@ -62,8 +62,6 @@ GetOptions(
 $opt_verbose++ if $opt_debug;
 $opt_perlver = version->parse($opt_perlver || $])->numify;
 
-Dist::Surveyor::Inquiry->init_cache(!$opt_uncached);
-
 my $major_error_count = 0; # exit status
 
 sub main {
@@ -86,19 +84,19 @@ sub main {
 
     $::DEBUG = $opt_debug;
     $::VERBOSE = $opt_verbose;
-    Dist::Surveyor::Inquiry->perma_cache();
+    Dist::Surveyor::Inquiry->perma_cache() unless $opt_uncached;
 
     my @installed_releases = determine_installed_releases(@libdirs);
     write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
 
     warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
-        (time-$^T)/60, $metacpan_calls;
+        (time-$^T)/60, $Dist::Surveyor::Inquiry::metacpan_calls;
 
 
     if ($opt_makecpan) {
         require Dist::Surveyor::MakeCpan;
         my $cpan = Dist::Surveyor::MakeCpan->new(
-            $opt_makecpan, PROGNAME, $distro_key_mod_names, $opt_verbose);
+            $opt_makecpan, PROGNAME, $distro_key_mod_names);
 
         warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
 
