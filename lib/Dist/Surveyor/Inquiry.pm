@@ -97,6 +97,20 @@ for my $subname (@memoize_subs) {
     memoize($subname, %memoize_args);
 }
 
+=head2 get_release_info($author, $release)
+
+Receive release info, such as:
+
+    get_release_info('SEMUELF', 'Dist-Surveyor-0.009')
+
+Returns a hashref containing all that release meta information, returned by
+http://api.metacpan.org/v0/release/$author/$release
+(but not information on the files inside the module)
+
+Dies on HTTP error, and warns on empty response.
+
+=cut
+
 sub get_release_info {
     my ($author, $release) = @_;
     $metacpan_calls++;
