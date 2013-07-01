@@ -155,7 +155,7 @@ is a hashref containing release information and file information:
 sub get_candidate_cpan_dist_releases {
     my ($module, $version, $file_size) = @_;
 
-    my $version_qual = _prepare_version_query($version);
+    my $version_qual = _prepare_version_query(0, $version);
 
     my @and_quals = (
         {"term" => {"file.module.name" => $module }},
@@ -188,6 +188,15 @@ sub get_candidate_cpan_dist_releases {
     return _process_response("get_candidate_cpan_dist_releases($module, $version, $file_size)", $response);
 }
 
+=head2 get_candidate_cpan_dist_releases_fallback($module, $version)
+
+Similar to get_candidate_cpan_dist_releases, but getting called when 
+get_candidate_cpan_dist_releases fails for find matching file and release.
+
+Maybe the file was tempared somehow, so the file size does not match anymore.
+
+=cut
+
 sub get_candidate_cpan_dist_releases_fallback {
     my ($module, $version) = @_;
 
@@ -196,7 +205,7 @@ sub get_candidate_cpan_dist_releases_fallback {
     # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
     (my $distname = $module) =~ s/::/-/g;
 
-    my $version_qual = _prepare_version_query($version);
+    my $version_qual = _prepare_version_query(1, $version);
 
     my @and_quals = (
         {"term" => {"distribution" => $distname }},
@@ -225,9 +234,13 @@ sub get_candidate_cpan_dist_releases_fallback {
 }
 
 sub _prepare_version_query {
-    my $version = shift;
+    my ($is_fallback, $version) = shift;
     $version = 0 if not defined $version; # XXX
-    
+    my ($v_key, $num_key) = 
+        $is_fallback 
+        ? qw{ version version_numified } 
+        : qw{ file.module.version file.module.version_numified };
+
     # timbunce: So, the current situation is that: version_numified is a float
     # holding version->parse($raw_version)->numify, and version is a string
     # also holding version->parse($raw_version)->numify at the moment, and
@@ -237,13 +250,9 @@ sub _prepare_version_query {
     my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
     my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
     my @version_qual;
-    # push @version_qual, { term => { "version" => $_ } } # originally used by fallback
-    # push @version_qual, { term => { "file.module.version" => $_ } }# originally used by not-fallback
-    push @version_qual, { term => { "file.module.version" => $_ } }
+    push @version_qual, { term => { $v_key => $_ } }
         for keys %v;
-    # push @version_qual, { term => { "version_numified" => $_ }} # originally used by fallback
-    # push @version_qual, { term => { "file.module.version_numified" => $_ }} # originally used by not-fallback
-    push @version_qual, { term => { "file.module.version_numified" => $_ }}
+    push @version_qual, { term => { $num_key => $_ }}
         for grep { looks_like_number($_) } keys %v;
     return \@version_qual;
 }
