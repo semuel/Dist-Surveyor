@@ -15,18 +15,14 @@ use warnings;
 
 use version;
 use Carp; # core
-use Config; # core
 use Data::Dumper; # core
-use Scalar::Util qw(looks_like_number); # core
 use File::Find;  # core
 use File::Spec; # core
-use Getopt::Long; # core
 use List::Util qw(max sum); # core
 use Dist::Surveyor::Inquiry; # internal
 use Module::CoreList;
 use Module::Metadata;
 
-use constant PROGNAME => 'dist_surveyor';
 use constant ON_WIN32 => $^O eq 'MSWin32';
 use constant ON_VMS   => $^O eq 'VMS';
 
@@ -34,105 +30,63 @@ if (ON_VMS) {
     require File::Spec::Unix;
 }
 
-my $distro_key_mod_names = {
-    'PathTools' => 'File::Spec',
-    'Template-Toolkit' => 'Template',
-    'TermReadKey' => 'Term::ReadKey',
-    'libwww-perl' => 'LWP',
-    'ack' => 'App::Ack',
-};
+our ($DEBUG, $VERBOSE);
+*DEBUG = \$::DEBUG;
+*VERBOSE = \$::VERBOSE;
 
-GetOptions(
-    'match=s' => \my $opt_match,
-    'v|verbose!' => \my $opt_verbose,
-    'd|debug!' => \my $opt_debug,
-    # target perl version, re core modules
-    'perlver=s' => \my $opt_perlver,
-    # include old dists that have remnant/orphaned modules installed
-    'remnants!' => \my $opt_remnants,
-    # don't use a persistent cache
-    'uncached!' => \my $opt_uncached,
-    'makecpan=s' => \my $opt_makecpan,
-    # e.g., 'download_url author'
-    'output=s' => \(my $opt_output ||= 'url'),
-    # e.g., 'some-command --foo --file %s --authorid %s'
-    'format=s' => \my $opt_format,
-) or exit 1;
+require Exporter;
+our @ISA = qw{Exporter};
+our @EXPORT = qw{determine_installed_releases};
 
-$opt_verbose++ if $opt_debug;
-$opt_perlver = version->parse($opt_perlver || $])->numify;
+=head1 determine_installed_releases($options, $search_dirs)
 
-my $major_error_count = 0; # exit status
+$options includes:
 
-sub main {
+=over
 
-    die "Usage: $0 perl-lib-directory [...]\n"
-        unless @ARGV;
-    my @libdirs = @ARGV;
+=item opt_match
 
-    # check dirs and add archlib's if appropriate
-    for my $libdir (@libdirs) {
-        die "$libdir isn't a directory\n"
-            unless -d $libdir;
+A regex qr//. If exists, will ignore modules that doesn't match this regex
 
-        my $archdir = "$libdir/$Config{archname}";
-        if (-d $archdir) {
-            unshift @libdirs, $archdir
-                unless grep { $_ eq $archdir } @libdirs;
-        }
-    }
+=item opt_perlver
 
-    $::DEBUG = $opt_debug;
-    $::VERBOSE = $opt_verbose;
-    Dist::Surveyor::Inquiry->perma_cache() unless $opt_uncached;
+Skip modules that are included as core in this Perl version
 
-    my @installed_releases = determine_installed_releases(@libdirs);
-    write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
+=item opt_remnants
 
-    warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
-        (time-$^T)/60, $Dist::Surveyor::Inquiry::metacpan_calls;
+If true, output will include old distribution versions that have left old modules behind
 
+=item distro_key_mod_names
 
-    if ($opt_makecpan) {
-        require Dist::Surveyor::MakeCpan;
-        my $cpan = Dist::Surveyor::MakeCpan->new(
-            $opt_makecpan, PROGNAME, $distro_key_mod_names);
+A hash-ref, with a list of irregular named releases. i.e. 'libwww-perl' => 'LWP'.
 
-        warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
+=back
 
-        for my $ri (@installed_releases) {
-            $cpan->add_release($ri);
-        }
-        $cpan->close();
-        $major_error_count += $cpan->errors();
-    }
+$search_dirs is an array-ref containing the list of directories to survey.
 
-    exit $major_error_count;
-}
+=cut
 
 sub determine_installed_releases {
-    my (@search_dirs) = @_;
-
-    warn "Searching @search_dirs\n" if $opt_verbose;
+    my ($options, $search_dirs) = @_;
 
     my %installed_mod_info;
 
-    warn "Finding modules in @search_dirs\n";
-    my ($installed_mod_files, $installed_meta) = find_installed_modules(@search_dirs);
+    warn "Finding modules in @$search_dirs\n";
+    my ($installed_mod_files, $installed_meta) = find_installed_modules(@$search_dirs);
 
     # get the installed version of each installed module and related info
     warn "Finding candidate releases for the ".keys(%$installed_mod_files)." installed modules\n";
     foreach my $module ( sort keys %$installed_mod_files ) {
         my $mod_file = $installed_mod_files->{$module};
 
-        if ($opt_match) {
+        if (my $opt_match = $options->{opt_match}) {
             if ($module !~ m/$opt_match/o) {
                 delete $installed_mod_files->{$module};
                 next;
             }
         }
 
-        module_progress_indicator($module) unless $opt_verbose;
+        module_progress_indicator($module) unless $VERBOSE;
 
         my $mod_version = do {
             # silence warnings about duplicate VERSION declarations
@@ -145,10 +99,10 @@ sub determine_installed_releases {
         my $mod_file_size = -s $mod_file;
 
         # Eliminate modules that will be supplied by the target perl version
-        if ( my $cv = $Module::CoreList::version{ $opt_perlver }->{$module} ) {
+        if ( my $cv = $Module::CoreList::version{ $options->{opt_perlver} }->{$module} ) {
             $cv =~ s/ //g;
             if (version->parse($cv) >= version->parse($mod_version)) {
-                warn "$module is core in perl $opt_perlver (lib: $mod_version, core: $cv) - skipped\n";
+                warn "$module is core in perl $options->{opt_perlver} (lib: $mod_version, core: $cv) - skipped\n";
                 next;
             }
         }
@@ -176,12 +130,12 @@ sub determine_installed_releases {
                     # probably either a local change/patch or installed direct from repo
                     # but with a version number that matches a release
                     warn "$module $mod_version on CPAN but with different file size (not $mod_file_size)\n"
-                        if $mod_version or $opt_verbose;
+                        if $mod_version or $VERBOSE;
                     $mi->{file_size_mismatch}++;
                 }
                 elsif ($ccdr = get_candidate_cpan_dist_releases_fallback($module, $mod_version) and %$ccdr) {
                     warn "$module $mod_version not on CPAN but assumed to be from @{[ sort keys %$ccdr ]}\n"
-                        if $mod_version or $opt_verbose;
+                        if $mod_version or $VERBOSE;
                     $mi->{cpan_dist_fallback}++;
                 }
                 else {
@@ -193,7 +147,7 @@ sub determine_installed_releases {
                     # - a build-time create module eg common/sense.pm.PL
                     warn "$module $mod_version not found on CPAN\n"
                         if $mi->{version} # no version implies uninteresting
-                        or $opt_verbose;
+                        or $VERBOSE;
                     # XXX could try finding the module with *any* version on cpan
                     # to help with later advice. ie could select as candidates
                     # the version above and the version below the number we have,
@@ -217,7 +171,7 @@ sub determine_installed_releases {
     foreach my $mod ( sort keys %installed_mod_info ) {
         my $mi = $installed_mod_info{$mod};
 
-        module_progress_indicator($mod) unless $opt_verbose;
+        module_progress_indicator($mod) unless $VERBOSE;
 
         # find best match among the cpan releases that included this module
         my $ccdr = $installed_mod_info{$mod}{candidate_cpan_dist_releases}
@@ -235,9 +189,10 @@ sub determine_installed_releases {
             # it doesn't make much sense to be here at the per-module level
             my @in_perllocal = grep {
                 my $distname = $_->{distribution};
-                my ($v, $dist_mod_name) = perllocal_distro_mod_version($distname, $installed_meta->{perllocalpod});
+                my ($v, $dist_mod_name) = perllocal_distro_mod_version(
+                    $options->{distro_key_mod_names}, $distname, $installed_meta->{perllocalpod});
                 warn "$dist_mod_name in perllocal.pod: ".($v ? "YES" : "NO")."\n"
-                    if $opt_debug;
+                    if $DEBUG;
                 $v;
             } @$best;
             if (@in_perllocal && @in_perllocal < @$best) {
@@ -251,7 +206,7 @@ sub determine_installed_releases {
             my $best_desc = join " or ", map { $_->{release} } @$best;
             my $pct = sprintf "%.2f%%", $best->[0]{fraction_installed} * 100;
             warn "$mod $mi->{version} odd best match: $best_desc $note ($best->[0]{fraction_installed})\n"
-                if $note or $opt_verbose or ($mi->{version} and $best->[0]{fraction_installed} < 0.3);
+                if $note or $VERBOSE or ($mi->{version} and $best->[0]{fraction_installed} < 0.3);
             # if the module has no version and multiple best matches
             # then it's unlikely make a useful contribution, so ignore it
             # XXX there's a risk that we'd ignore all the modules of a release
@@ -308,7 +263,7 @@ sub determine_installed_releases {
             warn "\tSelecting based on latest version\n";
         }
 
-        if (@remnant_dists or $opt_debug) {
+        if (@remnant_dists or $DEBUG) {
             warn "Distributions with remnants (chosen release is first):\n"
                 unless our $dist_with_remnants_warning++;
             warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
@@ -324,7 +279,7 @@ sub determine_installed_releases {
         }
 
         # note ordering: remnants first
-        for (($opt_remnants ? @remnant_dists : ()), $installed_dist) {
+        for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
             my ($author, $distribution, $release)
                 = @{$_->{dist}}{qw(author distribution release)};
 
@@ -394,13 +349,13 @@ sub dist_fraction_installed {
                 ($hit == 1) ? "matches"
                     : ($mi) ? "differs ($mi->{version_obj}, $mi->{size})"
                     : "not installed",
-            if $opt_debug;
+            if $DEBUG;
         $hit;
     } values %$mods_in_rel) || 0;
 
     my $fraction_installed = ($mods_in_rel_count) ? $mods_inst_count/$mods_in_rel_count : 0;
     warn "$author/$release:\tfraction_installed $fraction_installed ($mods_inst_count/$mods_in_rel_count)\n"
-        if $opt_verbose or !$mods_in_rel_count;
+        if $VERBOSE or !$mods_in_rel_count;
 
     return $fraction_installed;
 }
@@ -504,7 +459,7 @@ sub find_installed_modules {
                         #my $content = read_file($File::Find::name);
                         #unless ( $content =~ m/^ \s* package \s+ (\#.*\n\s*)? $mod \b/xm ) {
                         #warn "No 'package $mod' seen in $File::Find::name\n"
-                        #if $opt_verbose && $content =~ /\b package \b/x;
+                        #if $VERBOSE && $content =~ /\b package \b/x;
                         #return;
                         #}
 
@@ -523,7 +478,7 @@ sub find_installed_modules {
 
 
 sub perllocal_distro_mod_version {
-    my ($distname, $perllocalpod) = @_;
+    my ($distro_key_mod_names, $distname, $perllocalpod) = @_;
 
     ( my $dist_mod_name = $distname ) =~ s/-/::/g;
     my $key_mod_name = $distro_key_mod_names->{$distname} || $dist_mod_name;
@@ -567,17 +522,26 @@ sub module_progress_indicator {
     }
 }
 
-sub write_fields {
-    my ($releases, $format, $fields, $fh) = @_;
+=head1 OTHERS
 
-    $format ||= join("\t", ('%s') x @$fields);
-    $format .= "\n";
+This module checks $::DEBUG and $::VERBOSE for obvious proposes.
 
-    for my $release_data (@$releases) {
-        printf $fh $format, map {
-            exists $release_data->{$_} ? $release_data->{$_} : "?$_"
-        } @$fields;
-    }
-}
+This module uses L<Dist::Surveyor::Inquiry> to communicate with MetaCPAN. 
+Check that module's documentation for options and caching. 
+
+=head1 AUTHOR
+
+Written by Tim Bunce E<lt>Tim.Bunce@pobox.com<gt> 
+
+Maintained by Fomberg Shmuel, E<lt>shmuelfomberg@gmail.comE<gt>
+ 
+=head1 COPYRIGHT AND LICENSE
+ 
+Copyright 2011-2013 by Tim Bunce.
+ 
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+ 
+=cut
 
 1;

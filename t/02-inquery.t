@@ -20,4 +20,8 @@ my $expected =  {
 };
 is_deeply($module_data, $expected, "get_module_versions_in_release");
 
+my $releases = get_candidate_cpan_dist_releases("Dist::Surveyor::DB_File", "0.009", 676);
+is_deeply([keys %$releases], ['Dist-Surveyor-0.009'], "Got the right release");
+is( $releases->{'Dist-Surveyor-0.009'}->{path}, 'lib/Dist/Surveyor/DB_File.pm', "Found the file" );
+
 done_testing();

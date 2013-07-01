@@ -7,6 +7,7 @@ use Fcntl qw(:DEFAULT :flock); # core
 use Dist::Surveyor::DB_File; # internal
 use LWP::UserAgent;
 use JSON;
+use Scalar::Util qw(looks_like_number); # core
 
 =head1 NAME
 
@@ -124,28 +125,41 @@ sub get_release_info {
     return $release_data;
 }
 
+=head2 get_candidate_cpan_dist_releases($module, $version, $file_size)
+
+Return a hashref containing all the releases that contain this module 
+(with the specific version and file size combination)
+
+The keys are the release name (i.e. 'Dist-Surveyor-0.009') and the value
+is a hashref containing release information and file information:
+
+    'Dist-Surveyor-0.009' => {
+        # release information
+        'date' => '2013-02-20T06:48:35.000Z',
+        'version' => '0.009',
+        'author' => 'SEMUELF',
+        'version_numified' => '0.009',
+        'release' => 'Dist-Surveyor-0.009',
+        'distribution' => 'Dist-Surveyor',
+        'version_obj' => <version object 0.009>,
+
+        # File information
+        'path' => 'lib/Dist/Surveyor/DB_File.pm',
+        'stat.mtime' => 1361342736,
+        'module.version' => '0.009'
+        'module.version_numified' => '0.009',
+    }
+
+=cut
+
 sub get_candidate_cpan_dist_releases {
     my ($module, $version, $file_size) = @_;
 
-    $version = 0 if not defined $version; # XXX
-
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "file.module.version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "file.module.version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
+    my $version_qual = _prepare_version_query($version);
 
     my @and_quals = (
         {"term" => {"file.module.name" => $module }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
+        (@$version_qual > 1 ? { "or" => $version_qual } : $version_qual->[0]),
     );
     push @and_quals, {"term" => {"file.stat.size" => $file_size }}
         if $file_size;
@@ -171,32 +185,7 @@ sub get_candidate_cpan_dist_releases {
         Content => to_json( $query, { canonical => 1 } ),
     );
     die $response->status_line unless $response->is_success;
-    my $results = decode_json $response->decoded_content;
-
-    my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases($module, $version, $file_size): too many results (>$metacpan_size)"
-        if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): ".Dumper($results)
-        if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
-
-    # filter out perl-like releases
-    @$hits = 
-        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
-        @$hits;
-
-    for my $hit (@$hits) {
-        $hit->{release_id} = delete $hit->{_parent};
-        # add version_obj for convenience (will fail and be undef for releases like "0.08124-TRIAL")
-        $hit->{fields}{version_obj} = eval { version->parse($hit->{fields}{version}) };
-    }
-
-    # we'll return { "Dist-Name-Version" => { details }, ... }
-    my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): @{[ sort keys %dists ]}\n"
-        if $VERBOSE;
-
-    return \%dists;
+    return _process_response("get_candidate_cpan_dist_releases($module, $version, $file_size)", $response);
 }
 
 sub get_candidate_cpan_dist_releases_fallback {
@@ -207,23 +196,11 @@ sub get_candidate_cpan_dist_releases_fallback {
     # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
     (my $distname = $module) =~ s/::/-/g;
 
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
+    my $version_qual = _prepare_version_query($version);
 
     my @and_quals = (
         {"term" => {"distribution" => $distname }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
+        (@$version_qual > 1 ? { "or" => $version_qual } : $version_qual->[0]),
     );
 
     # XXX doesn't cope with odd cases like 
@@ -244,12 +221,42 @@ sub get_candidate_cpan_dist_releases_fallback {
         Content => to_json( $query, { canonical => 1 } ),
     );
     die $response->status_line unless $response->is_success;
+    return _process_response("get_candidate_cpan_dist_releases_fallback($module, $version)", $response);
+}
+
+sub _prepare_version_query {
+    my $version = shift;
+    $version = 0 if not defined $version; # XXX
+    
+    # timbunce: So, the current situation is that: version_numified is a float
+    # holding version->parse($raw_version)->numify, and version is a string
+    # also holding version->parse($raw_version)->numify at the moment, and
+    # that'll change to ->stringify at some point. Is that right now? 
+    # mo: yes, I already patched the indexer, so new releases are already
+    # indexed ok, but for older ones I need to reindex cpan
+    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
+    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
+    my @version_qual;
+    # push @version_qual, { term => { "version" => $_ } } # originally used by fallback
+    # push @version_qual, { term => { "file.module.version" => $_ } }# originally used by not-fallback
+    push @version_qual, { term => { "file.module.version" => $_ } }
+        for keys %v;
+    # push @version_qual, { term => { "version_numified" => $_ }} # originally used by fallback
+    # push @version_qual, { term => { "file.module.version_numified" => $_ }} # originally used by not-fallback
+    push @version_qual, { term => { "file.module.version_numified" => $_ }}
+        for grep { looks_like_number($_) } keys %v;
+    return \@version_qual;
+}
+
+sub _process_response {
+    my ($funcname, $response) = @_;
+
     my $results = decode_json $response->decoded_content;
 
     my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases_fallback($module, $version): too many results (>$metacpan_size)"
+    die "$funcname: too many results (>$metacpan_size)"
         if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): ".Dumper($results)
+    warn "$funcname: ".Dumper($results)
         if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
 
     # filter out perl-like releases
@@ -266,7 +273,8 @@ sub get_candidate_cpan_dist_releases_fallback {
 
     # we'll return { "Dist-Name-Version" => { details }, ... }
     my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): @{[ sort keys %dists ]}\n"
+
+    warn "$funcname: @{[ sort keys %dists ]}\n"
         if $VERBOSE;
 
     return \%dists;
