@@ -6,7 +6,22 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 SYNOPSIS
 
-See L<dist_surveyor> for documentation.
+    my $options = {
+        opt_match => $opt_match,
+        opt_perlver => $opt_perlver,
+        opt_remnants => $opt_remnants,
+        distro_key_mod_names => $distro_key_mod_names,
+    };
+    my @installed_releases = determine_installed_releases($options, \@libdirs);
+
+=head1 DESCRIPTION
+
+Surveys your huge ball of Perl modules, jammed together inside a directory,
+and tells you exactly which module is installed there.
+
+For quick start, and a fine example of this module usage, see L<dist_surveyor>.
+
+This module have one exported function - determine_installed_releases
 
 =cut
 
@@ -530,9 +545,12 @@ This module checks $::DEBUG and $::VERBOSE for obvious proposes.
 This module uses L<Dist::Surveyor::Inquiry> to communicate with MetaCPAN. 
 Check that module's documentation for options and caching. 
 
+You can use L<Dist::Surveyor::MakeCpan> to take the list of releases
+and create a mini-cpan containing them.
+
 =head1 AUTHOR
 
-Written by Tim Bunce E<lt>Tim.Bunce@pobox.com<gt> 
+Written by Tim Bunce E<lt>Tim.Bunce@pobox.comE<gt> 
 
 Maintained by Fomberg Shmuel, E<lt>shmuelfomberg@gmail.comE<gt>
  
