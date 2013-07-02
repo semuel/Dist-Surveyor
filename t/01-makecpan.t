@@ -32,4 +32,9 @@ $cpan->close();
 
 is($cpan->errors(), 0, "no errors");
 
+ok(-e File::Spec->catdir($cpan_dir, '/authors/id/S/SE/SEMUELF/Dist-Surveyor-0.009.tar.gz'), "Release file downloaded");
+
+rmtree($cpan_dir);
+ok(!-e $cpan_dir, "MiniCPAN directory deleted");
+
 done_testing();
