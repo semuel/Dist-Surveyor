@@ -74,7 +74,7 @@ my $locking_file;
 
 sub perma_cache {
     my $class = shift;
-    my $db_generation = 2; # XXX increment on incompatible change
+    my $db_generation = 3; # XXX increment on incompatible change
     my $pname = $FindBin::Script;
     $pname =~ s/\..*$//;
     my $memoize_file = "$pname-$db_generation.db";
@@ -95,6 +95,7 @@ for my $subname (@memoize_subs) {
     my %memoize_args = (
         SCALAR_CACHE => [ HASH => \%memoize_cache ],
         LIST_CACHE   => 'FAULT',
+        NORMALIZER   => sub { return join("\034", $subname, @_) }
     );
     memoize($subname, %memoize_args);
 }
