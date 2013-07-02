@@ -68,6 +68,7 @@ $search_dirs is an array-ref containing the list of directories to survey.
 
 sub determine_installed_releases {
     my ($options, $search_dirs) = @_;
+    $options->{opt_perlver} ||= version->parse( $] )->numify;
 
     my %installed_mod_info;
 

@@ -8,6 +8,7 @@ use Dist::Surveyor::DB_File; # internal
 use LWP::UserAgent;
 use JSON;
 use Scalar::Util qw(looks_like_number); # core
+use Data::Dumper;
 
 =head1 NAME
 
@@ -154,6 +155,7 @@ is a hashref containing release information and file information:
 
 sub get_candidate_cpan_dist_releases {
     my ($module, $version, $file_size) = @_;
+    my $funcstr = "get_candidate_cpan_dist_releases($module, $version, $file_size)";
 
     my $version_qual = _prepare_version_query(0, $version);
 
@@ -179,13 +181,14 @@ sub get_candidate_cpan_dist_releases {
             file.module.version_numified date stat.mtime distribution file.path
             )]
     };
+
     my $response = $ua->post(
         'http://api.metacpan.org/v0/file',
         Content_Type => 'application/json',
         Content => to_json( $query, { canonical => 1 } ),
     );
     die $response->status_line unless $response->is_success;
-    return _process_response("get_candidate_cpan_dist_releases($module, $version, $file_size)", $response);
+    return _process_response($funcstr, $response);
 }
 
 =head2 get_candidate_cpan_dist_releases_fallback($module, $version)
@@ -234,7 +237,7 @@ sub get_candidate_cpan_dist_releases_fallback {
 }
 
 sub _prepare_version_query {
-    my ($is_fallback, $version) = shift;
+    my ($is_fallback, $version) = @_;
     $version = 0 if not defined $version; # XXX
     my ($v_key, $num_key) = 
         $is_fallback 
