@@ -117,10 +117,6 @@ Probably.
 
 =head1 TODO
 
-    * Polish up, refactor, add tests etc. Including making Dist::Surveyor a proper
-        module that exports functions (or uses methods) and changing dist_surveyor
-        to use that interface.
-
     * Auto-detect when directory given isn't the root of a perl library dir tree.
         E.g. by matching file names to module names
 
