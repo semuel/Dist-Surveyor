@@ -12,7 +12,15 @@ my %WriteMakefileArgs = (
   "ABSTRACT" => "Survey installed modules and determine the specific distribution versions they came from",
   "AUTHOR" => "Tim Bunce <Tim.Bunce\@pobox.com>",
   "BUILD_REQUIRES" => {
-    "Test::More" => "0.88"
+    "Archive::Tar" => 0,
+    "CPAN::DistnameInfo" => 0,
+    "Compress::Zlib" => 0,
+    "JSON" => 0,
+    "LWP::UserAgent" => 0,
+    "Module::CoreList" => 0,
+    "Module::Metadata" => 0,
+    "Test::More" => "0.88",
+    "version" => 0
   },
   "CONFIGURE_REQUIRES" => {
     "ExtUtils::MakeMaker" => "6.30"
@@ -23,16 +31,8 @@ my %WriteMakefileArgs = (
   ],
   "LICENSE" => "perl",
   "NAME" => "Dist::Surveyor",
-  "PREREQ_PM" => {
-    "CPAN::DistnameInfo" => 0,
-    "Compress::Zlib" => 0,
-    "JSON" => 0,
-    "LWP::UserAgent" => 0,
-    "Module::CoreList" => 0,
-    "Module::Metadata" => 0,
-    "version" => 0
-  },
-  "VERSION" => "0.009",
+  "PREREQ_PM" => {},
+  "VERSION" => "0.010",
   "test" => {
     "TESTS" => "t/*.t"
   }

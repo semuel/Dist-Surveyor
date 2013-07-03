@@ -6,7 +6,7 @@ dist_surveyor - determine exactly what dist versions are installed
 
 =head1 VERSION
 
-version 0.009
+version 0.010
 
 =head1 SYNOPSIS
 
@@ -121,10 +121,6 @@ Probably.
 
 =head1 TODO
 
-    * Polish up, refactor, add tests etc. Including making Dist::Surveyor a proper
-        module that exports functions (or uses methods) and changing dist_surveyor
-        to use that interface.
-
     * Auto-detect when directory given isn't the root of a perl library dir tree.
         E.g. by matching file names to module names
 
@@ -156,14 +152,114 @@ Probably.
 
 use strict;
 use warnings;
+use Getopt::Long; # core
+use Config; # core
 
 $| = 1;
 
 use Dist::Surveyor;
+use Dist::Surveyor::Inquiry; # internal
 
-# XXX nasty quick hack conversion from script to module
-# TODO refactor to give Dist::Surveyor a reasonable simple API
-# and use that here
-Dist::Surveyor::main(@ARGV);
+use constant PROGNAME => 'dist_surveyor';
+
+GetOptions(
+    'match=s' => \my $opt_match,
+    'v|verbose!' => \my $opt_verbose,
+    'd|debug!' => \my $opt_debug,
+    # target perl version, re core modules
+    'perlver=s' => \my $opt_perlver,
+    # include old dists that have remnant/orphaned modules installed
+    'remnants!' => \my $opt_remnants,
+    # don't use a persistent cache
+    'uncached!' => \my $opt_uncached,
+    'makecpan=s' => \my $opt_makecpan,
+    # e.g., 'download_url author'
+    'output=s' => \(my $opt_output ||= 'url'),
+    # e.g., 'some-command --foo --file %s --authorid %s'
+    'format=s' => \my $opt_format,
+) or exit 1;
+
+$opt_verbose++ if $opt_debug;
+$opt_perlver = version->parse($opt_perlver || $])->numify;
+
+our $VERBOSE = $opt_verbose;
+our $DEBUG = $opt_debug;
+
+my $major_error_count = 0; # exit status
+
+my $distro_key_mod_names = {
+    'PathTools' => 'File::Spec',
+    'Template-Toolkit' => 'Template',
+    'TermReadKey' => 'Term::ReadKey',
+    'libwww-perl' => 'LWP',
+    'ack' => 'App::Ack',
+};
+
+sub main {
+
+    die "Usage: $0 perl-lib-directory [...]\n"
+        unless @ARGV;
+    my @libdirs = @ARGV;
+
+    # check dirs and add archlib's if appropriate
+    for my $libdir (@libdirs) {
+        die "$libdir isn't a directory\n"
+            unless -d $libdir;
+
+        my $archdir = "$libdir/$Config{archname}";
+        if (-d $archdir) {
+            unshift @libdirs, $archdir
+                unless grep { $_ eq $archdir } @libdirs;
+        }
+    }
+
+    $::DEBUG = $opt_debug;
+    $::VERBOSE = $opt_verbose;
+    Dist::Surveyor::Inquiry->perma_cache() unless $opt_uncached;
+
+    my $options = {
+        opt_match => $opt_match,
+        opt_perlver => $opt_perlver,
+        opt_remnants => $opt_remnants,
+        distro_key_mod_names => $distro_key_mod_names,
+    };
+    my @installed_releases = determine_installed_releases($options, \@libdirs);
+    write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
+
+    warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
+        (time-$^T)/60, $Dist::Surveyor::Inquiry::metacpan_calls;
+
+
+    if ($opt_makecpan) {
+        require Dist::Surveyor::MakeCpan;
+        my $cpan = Dist::Surveyor::MakeCpan->new(
+            $opt_makecpan, PROGNAME, $distro_key_mod_names);
+
+        warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
+
+        for my $ri (@installed_releases) {
+            $cpan->add_release($ri);
+        }
+        $cpan->close();
+        $major_error_count += $cpan->errors();
+    }
+
+    exit $major_error_count;
+}
+
+sub write_fields {
+    my ($releases, $format, $fields, $fh) = @_;
+
+    $format ||= join("\t", ('%s') x @$fields);
+    $format .= "\n";
+
+    for my $release_data (@$releases) {
+        printf $fh $format, map {
+            exists $release_data->{$_} ? $release_data->{$_} : "?$_"
+        } @$fields;
+    }
+}
+
+main(@ARGV);
 
 exit 0;

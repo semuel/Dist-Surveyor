@@ -1,6 +1,6 @@
 package Dist::Surveyor;
 {
-  $Dist::Surveyor::VERSION = '0.009';
+  $Dist::Surveyor::VERSION = '0.010';
 }
 
 =head1 NAME
@@ -9,11 +9,26 @@ Dist::Surveyor - Survey installed modules and determine the specific distributio
 
 =head1 VERSION
 
-version 0.009
+version 0.010
 
 =head1 SYNOPSIS
 
-See L<dist_surveyor> for documentation.
+    my $options = {
+        opt_match => $opt_match,
+        opt_perlver => $opt_perlver,
+        opt_remnants => $opt_remnants,
+        distro_key_mod_names => $distro_key_mod_names,
+    };
+    my @installed_releases = determine_installed_releases($options, \@libdirs);
+
+=head1 DESCRIPTION
+
+Surveys your huge ball of Perl modules, jammed together inside a directory,
+and tells you exactly which module is installed there.
+
+For quick start, and a fine example of this module usage, see L<dist_surveyor>.
+
+This module have one exported function - determine_installed_releases
 
 =cut
 
@@ -22,26 +37,14 @@ use warnings;
 
 use version;
 use Carp; # core
-use Config; # core
-use CPAN::DistnameInfo;
 use Data::Dumper; # core
-use Scalar::Util qw(looks_like_number); # core
-use Fcntl qw(:DEFAULT :flock); # core
-use File::Basename qw{dirname};  # core
 use File::Find;  # core
-use File::Path; # core
 use File::Spec; # core
-use Getopt::Long; # core
 use List::Util qw(max sum); # core
-use LWP::UserAgent;
-use LWP::Simple qw{is_error};
-use Memoize; # core
-use Dist::Surveyor::DB_File; # internal
+use Dist::Surveyor::Inquiry; # internal
 use Module::CoreList;
 use Module::Metadata;
-use JSON;
 
-use constant PROGNAME => 'dist_surveyor';
 use constant ON_WIN32 => $^O eq 'MSWin32';
 use constant ON_VMS   => $^O eq 'VMS';
 
@@ -49,331 +52,64 @@ if (ON_VMS) {
     require File::Spec::Unix;
 }
 
-GetOptions(
-    'match=s' => \my $opt_match,
-    'v|verbose!' => \my $opt_verbose,
-    'd|debug!' => \my $opt_debug,
-    # target perl version, re core modules
-    'perlver=s' => \my $opt_perlver,
-    # include old dists that have remnant/orphaned modules installed
-    'remnants!' => \my $opt_remnants,
-    # don't use a persistent cache
-    'uncached!' => \my $opt_uncached,
-    'makecpan=s' => \my $opt_makecpan,
-    # e.g., 'download_url author'
-    'output=s' => \(my $opt_output ||= 'url'),
-    # e.g., 'some-command --foo --file %s --authorid %s'
-    'format=s' => \my $opt_format,
-) or exit 1;
+our ($DEBUG, $VERBOSE);
+*DEBUG = \$::DEBUG;
+*VERBOSE = \$::VERBOSE;
 
-$opt_verbose++ if $opt_debug;
-$opt_perlver = version->parse($opt_perlver || $])->numify;
+require Exporter;
+our @ISA = qw{Exporter};
+our @EXPORT = qw{determine_installed_releases};
 
-my $major_error_count = 0; # exit status
+=head1 determine_installed_releases($options, $search_dirs)
 
-# We have to limit the number of results when using MetaCPAN::API.
-# We can'r make it too large as it hurts the server (it preallocates)
-# but need to make it large enough for worst case distros (eg eBay-API).
-# TODO: switching to the ElasticSearch module, with cursor support, will
-# probably avoid the need for this. Else we could dynamically adjust.
-my $metacpan_size = 2500;
-my $metacpan_calls = 0;
-my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
+$options includes:
 
-# caching via persistent memoize
+=over
 
-my $db_generation = 2; # XXX increment on incompatible change
-my $memoize_file = PROGNAME."-$db_generation.db";
-my %memoize_cache;
-my $locking_file;
-if (not $opt_uncached) {
-    open $locking_file, ">", "$memoize_file.lock" 
-        or die "Unable to open lock file: $!";
-    flock ($locking_file, LOCK_EX) || die "flock: $!";
-    tie %memoize_cache => 'Dist::Surveyor::DB_File', $memoize_file, O_CREAT|O_RDWR, 0640
-        or die "Unable to use persistent cache: $!";
-}
-my @memoize_subs = qw(
-    get_candidate_cpan_dist_releases
-    get_module_versions_in_release
-);
-for my $subname (@memoize_subs) {
-    my %memoize_args = (
-        SCALAR_CACHE => [ HASH => \%memoize_cache ],
-        LIST_CACHE   => 'FAULT',
-    );
-    memoize($subname, %memoize_args);
-}
+=item opt_match
 
+A regex qr//. If exists, will ignore modules that doesn't match this regex
 
+=item opt_perlver
 
-# for distros with names that don't match the principle module name
-# yet the principle module version always matches the distro
-# Used for perllocal.pod lookups and for picking 'token packages' for minicpan
-# # XXX should be automated lookup rather than hardcoded (else remove perllocal.pod parsing)
-my %distro_key_mod_names = (
-    'PathTools' => 'File::Spec',
-    'Template-Toolkit' => 'Template',
-    'TermReadKey' => 'Term::ReadKey',
-    'libwww-perl' => 'LWP',
-    'ack' => 'App::Ack',
-);
+Skip modules that are included as core in this Perl version
 
+=item opt_remnants
 
-sub main {
+If true, output will include old distribution versions that have left old modules behind
 
-    die "Usage: $0 perl-lib-directory [...]\n"
-        unless @ARGV;
-    my @libdirs = @ARGV;
+=item distro_key_mod_names
 
-    # check dirs and add archlib's if appropriate
-    for my $libdir (@libdirs) {
-        die "$libdir isn't a directory\n"
-            unless -d $libdir;
+A hash-ref, with a list of irregular named releases. i.e. 'libwww-perl' => 'LWP'.
 
-        my $archdir = "$libdir/$Config{archname}";
-        if (-d $archdir) {
-            unshift @libdirs, $archdir
-                unless grep { $_ eq $archdir } @libdirs;
-        }
-    }
+=back
 
-    my @installed_releases = determine_installed_releases(@libdirs);
-    write_fields(\@installed_releases, $opt_format, [split ' ', $opt_output], \*STDOUT);
+$search_dirs is an array-ref containing the list of directories to survey.
 
-    warn sprintf "Completed survey in %.1f minutes using %d metacpan calls.\n",
-        (time-$^T)/60, $metacpan_calls;
-
-
-    do_makecpan(@installed_releases)
-        if $opt_makecpan;
-
-    exit $major_error_count;
-}
-
-
-sub do_makecpan {
-    my (@installed_releases) = @_;
-    require Compress::Zlib;
-
-    warn "Updating $opt_makecpan for ".@installed_releases." releases...\n";
-    mkpath("$opt_makecpan/modules");
-
-    my %pkg_ver_rel;    # for 02packages
-    for my $ri (@installed_releases) {
-
-        # --- get the file
-
-        my $main_url = $ri->{download_url};
-        my $di = distname_info_from_url($main_url);
-        my $pathfile = "authors/id/".$di->pathname;
-        my $destfile = "$opt_makecpan/$pathfile";
-        mkpath(dirname($destfile));
-
-        my @urls = ($main_url);
-        for my $mirror ('http://backpan.perl.org') {
-            push @urls, "$mirror/$pathfile";
-        }
-
-        my $mirror_status;
-        for my $url (@urls) {
-            $mirror_status = eval { mirror($url, $destfile) };
-            last if not is_error($mirror_status||500);
-        }
-        if ($@ || is_error($mirror_status)) {
-            my $err = ($@ and chomp $@) ? $@ : $mirror_status;
-            my $msg = "Error $err mirroring $main_url";
-            if (-f $destfile) {
-                warn "$msg - using existing file\n";
-            }
-            else {
-                # better to keep going and add the packages to the index
-                # than abort at this stage due to network/mirror problems
-                # the user can drop the files in later
-                warn "$msg - continuing, ADD FILE MANUALLY!\n";
-                ++$major_error_count;
-            }
-        }
-        else {
-            warn "$mirror_status $main_url\n" if $opt_verbose;
-        }
-
-
-        my $mods_in_rel = get_module_versions_in_release($ri->{author}, $ri->{name});
-
-        if (!keys %$mods_in_rel) { # XXX hack for common::sense
-            (my $dist_as_pkg = $ri->{distribution}) =~ s/-/::/g;
-            warn "$ri->{author}/$ri->{name} has no modules! Adding fake module $dist_as_pkg ".$di->version."\n";
-            $mods_in_rel->{$dist_as_pkg} = {
-                name => $dist_as_pkg,
-                version => $di->version,
-                version_obj => version->parse($di->version),
-            };
-        }
-
-
-        # --- accumulate package info for 02packages file
-
-        for my $pkg (sort keys %$mods_in_rel ) {
-            # pi => { name=>, version=>, version_obj=> }
-            my $pi = $mods_in_rel->{$pkg};
-
-            # for selecting which dist a package belongs to
-            # XXX should factor in authorization status
-            my $p_r_match_score = p_r_match_score($pkg, $ri);
-
-            if (my $pvr = $pkg_ver_rel{$pkg}) {
-                # already seen same package name in different distribution
-                if ($p_r_match_score < $pvr->{p_r_match_score}) {
-                    warn "$pkg seen in $pvr->{ri}{name} so ignoring one in $ri->{name}\n";
-                    next;
-                }
-                warn "$pkg seen in $pvr->{ri}{name} - now overridden by $ri->{name}\n";
-            }
-
-            my $line = _fmtmodule($pkg, $di->pathname, $pi->{version});
-            $pkg_ver_rel{$pkg} = { line => $line, pi => $pi, ri => $ri, p_r_match_score => $p_r_match_score };
-        }
-
-    }
-
-
-    # --- write 02packages file
-
-    my $pkg_lines = _readpkgs($opt_makecpan);
-    my %packages;
-    for my $line (@$pkg_lines, map { $_->{line} } values %pkg_ver_rel) {
-        my ($pkg) = split(/\s+/, $line, 2);
-        if ($packages{$pkg} and $packages{$pkg} ne $line) {
-            warn "Old $packages{$pkg}\nNew $line\n" if $opt_verbose;
-        }
-        $packages{$pkg} = $line;
-    };
-    _writepkgs($opt_makecpan, [ sort values %packages ] );
-
-
-    # --- write extra data files that may be useful XXX may change
-    # XXX these don't all (yet?) merge with existing data
-    my $survey_datadump_dir = "$opt_makecpan/".PROGNAME;
-    mkpath($survey_datadump_dir);
-
-    # Write list of token packages - each should match only one release.
-    # This makes it _much_ faster to do installs via cpanm because it
-    # can skip the modules it knows are installed (whereas using a list of
-    # distros it has to reinstall _all_ of them every time).
-    # XXX maybe add as a separate option: "--mainpkgs mainpkgs.lst"
-    my %dist_packages;
-    while ( my ($pkg, $line) = each %packages) {
-        my $distpath = (split /\s+/, $line)[2];
-        $dist_packages{$distpath}{$pkg}++;
-    }
-    my %token_package;
-    my %token_package_pri = (       # alter install order for some modules
-        'Module::Build' => 100,     # should be near first
-        Moose => 50,
-
-        # install distros that use Module::Install late so their dependencies
-        # have already been resolved (else they try to fetch them directly,
-        # bypassing our cpanm --mirror-only goal)
-        'Olson::Abbreviations' => -90,
-
-        # distros with special needs
-        'Term::ReadKey' => -100,    # tests hang if run in background
-    );
-    for my $distpath (sort keys %dist_packages) {
-        my $dp = $dist_packages{$distpath};
-        my $di = CPAN::DistnameInfo->new($distpath);
-        #warn Dumper([ $distpath, $di->dist, $di]);
-        (my $token_pkg = $di->dist) =~ s/-/::/g;
-        if (!$dp->{$token_pkg}) {
-            if (my $keypkg = $distro_key_mod_names{$di->dist}) {
-                $token_pkg = $keypkg;
-            }
-            else {
-                # XXX not good - may pick a dummy test package
-                $token_pkg = (grep { $_ } keys %$dp)[0] || $token_pkg;
-                warn "Picked $token_pkg as token package for ".$di->distvname."\n";
-            }
-        }
-        $token_package{$token_pkg} = $token_package_pri{$token_pkg} || 0;
-    }
-
-    my @main_pkgs = sort { $token_package{$b} <=> $token_package{$a} or $a cmp $b } keys %token_package;
-    open my $key_pkg_fh, ">", "$survey_datadump_dir/token_packages.txt";
-    print $key_pkg_fh "$_\n" for @main_pkgs;
-    close $key_pkg_fh;
-
-    # Write list of releases, like default stdout
-    open my $rel_fh, ">", "$survey_datadump_dir/releases.txt";
-    write_fields(\@installed_releases, undef, [qw(url)], $rel_fh);
-    close $rel_fh;
-
-    # dump the primary result data for additional info and debugging
-    my $gzwrite = Compress::Zlib::gzopen("$survey_datadump_dir/_data_dump.perl.gz", 'wb')
-        or croak "Cannot open $survey_datadump_dir/_data_dump.perl.gz for writing: " . $Compress::Zlib::gzerrno;
-    $gzwrite->gzwrite("[\n");
-    for my $ri (@installed_releases) {
-        $gzwrite->gzwrite(Dumper($ri));
-        $gzwrite->gzwrite(",");
-    }
-    $gzwrite->gzwrite("]\n");
-    $gzwrite->gzclose;
-
-    warn "$opt_makecpan updated.\n"
-}
-
-
-
-sub p_r_match_score {
-    my ($pkg_name, $ri) = @_;
-    my @p = split /\W/, $pkg_name;
-    my @r = split /\W/, $ri->{name};
-    for my $i (0..max(scalar @p, scalar @r)) {
-        return $i if not defined $p[$i]
-                  or not defined $r[$i]
-                  or $p[$i] ne $r[$i]
-    }
-    die; # unreached
-}
-
-
-sub write_fields {
-    my ($releases, $format, $fields, $fh) = @_;
-
-    $format ||= join("\t", ('%s') x @$fields);
-    $format .= "\n";
-
-    for my $release_data (@$releases) {
-        printf $fh $format, map {
-            exists $release_data->{$_} ? $release_data->{$_} : "?$_"
-        } @$fields;
-    }
-}
-
+=cut
 
 sub determine_installed_releases {
-    my (@search_dirs) = @_;
-
-    warn "Searching @search_dirs\n" if $opt_verbose;
+    my ($options, $search_dirs) = @_;
+    $options->{opt_perlver} ||= version->parse( $] )->numify;
 
     my %installed_mod_info;
 
-    warn "Finding modules in @search_dirs\n";
-    my ($installed_mod_files, $installed_meta) = find_installed_modules(@search_dirs);
+    warn "Finding modules in @$search_dirs\n";
+    my ($installed_mod_files, $installed_meta) = find_installed_modules(@$search_dirs);
 
     # get the installed version of each installed module and related info
     warn "Finding candidate releases for the ".keys(%$installed_mod_files)." installed modules\n";
     foreach my $module ( sort keys %$installed_mod_files ) {
         my $mod_file = $installed_mod_files->{$module};
 
-        if ($opt_match) {
+        if (my $opt_match = $options->{opt_match}) {
             if ($module !~ m/$opt_match/o) {
                 delete $installed_mod_files->{$module};
                 next;
             }
         }
 
-        module_progress_indicator($module) unless $opt_verbose;
+        module_progress_indicator($module) unless $VERBOSE;
 
         my $mod_version = do {
             # silence warnings about duplicate VERSION declarations
@@ -386,10 +122,10 @@ sub determine_installed_releases {
         my $mod_file_size = -s $mod_file;
 
         # Eliminate modules that will be supplied by the target perl version
-        if ( my $cv = $Module::CoreList::version{ $opt_perlver }->{$module} ) {
+        if ( my $cv = $Module::CoreList::version{ $options->{opt_perlver} }->{$module} ) {
             $cv =~ s/ //g;
             if (version->parse($cv) >= version->parse($mod_version)) {
-                warn "$module is core in perl $opt_perlver (lib: $mod_version, core: $cv) - skipped\n";
+                warn "$module is core in perl $options->{opt_perlver} (lib: $mod_version, core: $cv) - skipped\n";
                 next;
             }
         }
@@ -417,12 +153,12 @@ sub determine_installed_releases {
                     # probably either a local change/patch or installed direct from repo
                     # but with a version number that matches a release
                     warn "$module $mod_version on CPAN but with different file size (not $mod_file_size)\n"
-                        if $mod_version or $opt_verbose;
+                        if $mod_version or $VERBOSE;
                     $mi->{file_size_mismatch}++;
                 }
                 elsif ($ccdr = get_candidate_cpan_dist_releases_fallback($module, $mod_version) and %$ccdr) {
                     warn "$module $mod_version not on CPAN but assumed to be from @{[ sort keys %$ccdr ]}\n"
-                        if $mod_version or $opt_verbose;
+                        if $mod_version or $VERBOSE;
                     $mi->{cpan_dist_fallback}++;
                 }
                 else {
@@ -434,7 +170,7 @@ sub determine_installed_releases {
                     # - a build-time create module eg common/sense.pm.PL
                     warn "$module $mod_version not found on CPAN\n"
                         if $mi->{version} # no version implies uninteresting
-                        or $opt_verbose;
+                        or $VERBOSE;
                     # XXX could try finding the module with *any* version on cpan
                     # to help with later advice. ie could select as candidates
                     # the version above and the version below the number we have,
@@ -458,7 +194,7 @@ sub determine_installed_releases {
     foreach my $mod ( sort keys %installed_mod_info ) {
         my $mi = $installed_mod_info{$mod};
 
-        module_progress_indicator($mod) unless $opt_verbose;
+        module_progress_indicator($mod) unless $VERBOSE;
 
         # find best match among the cpan releases that included this module
         my $ccdr = $installed_mod_info{$mod}{candidate_cpan_dist_releases}
@@ -476,9 +212,10 @@ sub determine_installed_releases {
             # it doesn't make much sense to be here at the per-module level
             my @in_perllocal = grep {
                 my $distname = $_->{distribution};
-                my ($v, $dist_mod_name) = perllocal_distro_mod_version($distname, $installed_meta->{perllocalpod});
+                my ($v, $dist_mod_name) = perllocal_distro_mod_version(
+                    $options->{distro_key_mod_names}, $distname, $installed_meta->{perllocalpod});
                 warn "$dist_mod_name in perllocal.pod: ".($v ? "YES" : "NO")."\n"
-                    if $opt_debug;
+                    if $DEBUG;
                 $v;
             } @$best;
             if (@in_perllocal && @in_perllocal < @$best) {
@@ -492,7 +229,7 @@ sub determine_installed_releases {
             my $best_desc = join " or ", map { $_->{release} } @$best;
             my $pct = sprintf "%.2f%%", $best->[0]{fraction_installed} * 100;
             warn "$mod $mi->{version} odd best match: $best_desc $note ($best->[0]{fraction_installed})\n"
-                if $note or $opt_verbose or ($mi->{version} and $best->[0]{fraction_installed} < 0.3);
+                if $note or $VERBOSE or ($mi->{version} and $best->[0]{fraction_installed} < 0.3);
             # if the module has no version and multiple best matches
             # then it's unlikely make a useful contribution, so ignore it
             # XXX there's a risk that we'd ignore all the modules of a release
@@ -549,7 +286,7 @@ sub determine_installed_releases {
             warn "\tSelecting based on latest version\n";
         }
 
-        if (@remnant_dists or $opt_debug) {
+        if (@remnant_dists or $DEBUG) {
             warn "Distributions with remnants (chosen release is first):\n"
                 unless our $dist_with_remnants_warning++;
             warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
@@ -565,19 +302,13 @@ sub determine_installed_releases {
         }
 
         # note ordering: remnants first
-        for (($opt_remnants ? @remnant_dists : ()), $installed_dist) {
+        for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
             my ($author, $distribution, $release)
                 = @{$_->{dist}}{qw(author distribution release)};
 
-            $metacpan_calls++;
-            my $response = $ua->get("http://api.metacpan.org/v0/release/$author/$release");
-            die $response->status_line unless $response->is_success;
-            my $release_data = decode_json $response->decoded_content;
-            if (!$release_data) {
-                warn "Can't find release details for $author/$release - SKIPPED!\n";
-                next; # XXX could fake some of $release_data instead
-            }
-
+            my $release_data = get_release_info($author, $release);
+            next unless $release_data;
+            
             # shortcuts
             (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
 
@@ -597,7 +328,6 @@ sub determine_installed_releases {
 
     return @installed_releases;
 }
-
 
 # pick_best_cpan_dist_release - memoized
 # for each %$ccdr adds a fraction_installed based on %$installed_mod_info
@@ -642,261 +372,16 @@ sub dist_fraction_installed {
                 ($hit == 1) ? "matches"
                     : ($mi) ? "differs ($mi->{version_obj}, $mi->{size})"
                     : "not installed",
-            if $opt_debug;
+            if $DEBUG;
         $hit;
     } values %$mods_in_rel) || 0;
 
     my $fraction_installed = ($mods_in_rel_count) ? $mods_inst_count/$mods_in_rel_count : 0;
     warn "$author/$release:\tfraction_installed $fraction_installed ($mods_inst_count/$mods_in_rel_count)\n"
-        if $opt_verbose or !$mods_in_rel_count;
+        if $VERBOSE or !$mods_in_rel_count;
 
     return $fraction_installed;
 }
-
-
-sub get_candidate_cpan_dist_releases {
-    my ($module, $version, $file_size) = @_;
-
-    $version = 0 if not defined $version; # XXX
-
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "file.module.version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "file.module.version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
-
-    my @and_quals = (
-        {"term" => {"file.module.name" => $module }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
-    );
-    push @and_quals, {"term" => {"file.stat.size" => $file_size }}
-        if $file_size;
-
-    # XXX doesn't cope with odd cases like 
-    # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
-    $metacpan_calls++;
-
-    my $query = {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => {"and" => \@and_quals },
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => [qw(
-            release _parent author version version_numified file.module.version 
-            file.module.version_numified date stat.mtime distribution file.path
-            )]
-    };
-    my $response = $ua->post(
-        'http://api.metacpan.org/v0/file',
-        Content_Type => 'application/json',
-        Content => to_json( $query, { canonical => 1 } ),
-    );
-    die $response->status_line unless $response->is_success;
-    my $results = decode_json $response->decoded_content;
-
-    my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases($module, $version, $file_size): too many results (>$metacpan_size)"
-        if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): ".Dumper($results)
-        if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
-
-    # filter out perl-like releases
-    @$hits = 
-        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
-        @$hits;
-
-    for my $hit (@$hits) {
-        $hit->{release_id} = delete $hit->{_parent};
-        # add version_obj for convenience (will fail and be undef for releases like "0.08124-TRIAL")
-        $hit->{fields}{version_obj} = eval { version->parse($hit->{fields}{version}) };
-    }
-
-    # we'll return { "Dist-Name-Version" => { details }, ... }
-    my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases($module, $version, $file_size): @{[ sort keys %dists ]}\n"
-        if $opt_verbose;
-
-    return \%dists;
-}
-
-sub get_candidate_cpan_dist_releases_fallback {
-    my ($module, $version) = @_;
-
-    # fallback to look for distro of the same name as the module
-    # for odd cases like
-    # http://explorer.metacpan.org/?url=/module/MLEHMANN/common-sense-3.4/sense.pm.PL
-    (my $distname = $module) =~ s/::/-/g;
-
-    # timbunce: So, the current situation is that: version_numified is a float
-    # holding version->parse($raw_version)->numify, and version is a string
-    # also holding version->parse($raw_version)->numify at the moment, and
-    # that'll change to ->stringify at some point. Is that right now? 
-    # mo: yes, I already patched the indexer, so new releases are already
-    # indexed ok, but for older ones I need to reindex cpan
-    my $v = (ref $version && $version->isa('version')) ? $version : version->parse($version);
-    my %v = map { $_ => 1 } "$version", $v->stringify, $v->numify;
-    my @version_qual;
-    push @version_qual, { term => { "version" => $_ } }
-        for keys %v;
-    push @version_qual, { term => { "version_numified" => $_ }}
-        for grep { looks_like_number($_) } keys %v;
-
-    my @and_quals = (
-        {"term" => {"distribution" => $distname }},
-        (@version_qual > 1 ? { "or" => \@version_qual } : $version_qual[0]),
-    );
-
-    # XXX doesn't cope with odd cases like 
-    $metacpan_calls++;
-    my $query = {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => {"and" => \@and_quals },
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => [qw(
-            release _parent author version version_numified file.module.version 
-            file.module.version_numified date stat.mtime distribution file.path)]
-    };
-    my $response = $ua->post(
-        'http://api.metacpan.org/v0/file',
-        Content_Type => 'application/json',
-        Content => to_json( $query, { canonical => 1 } ),
-    );
-    die $response->status_line unless $response->is_success;
-    my $results = decode_json $response->decoded_content;
-
-    my $hits = $results->{hits}{hits};
-    die "get_candidate_cpan_dist_releases_fallback($module, $version): too many results (>$metacpan_size)"
-        if @$hits >= $metacpan_size;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): ".Dumper($results)
-        if grep { not $_->{fields}{release} } @$hits; # XXX temp, seen once but not since
-
-    # filter out perl-like releases
-    @$hits = 
-        grep { $_->{fields}{path} !~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b! }
-        grep { $_->{fields}{release} !~ /^(perl|ponie|parrot|kurila|SiePerl-)/ } 
-        @$hits;
-
-    for my $hit (@$hits) {
-        $hit->{release_id} = delete $hit->{_parent};
-        # add version_obj for convenience (will fail and be undef for releases like "0.08124-TRIAL")
-        $hit->{fields}{version_obj} = eval { version->parse($hit->{fields}{version}) };
-    }
-
-    # we'll return { "Dist-Name-Version" => { details }, ... }
-    my %dists = map { $_->{fields}{release} => $_->{fields} } @$hits;
-    warn "get_candidate_cpan_dist_releases_fallback($module, $version): @{[ sort keys %dists ]}\n"
-        if $opt_verbose;
-
-    return \%dists;
-}
-
-
-# this can be called for all sorts of releases that are only vague possibilities
-# and aren't actually installed, so generally it's quiet
-sub get_module_versions_in_release {
-    my ($author, $release) = @_;
-
-    $metacpan_calls++;
-    my $results = eval { 
-        my $query = {
-            "size" => $metacpan_size,
-            "query" =>  { "filtered" => {
-                "filter" => {"and" => [
-                    {"term" => {"release" => $release }},
-                    {"term" => {"author" => $author }},
-                    {"term" => {"mime" => "text/x-script.perl-module"}},
-                ]},
-                "query" => {"match_all" => {}},
-            }},
-            "fields" => ["path","name","_source.module", "_source.stat.size"],
-        }; 
-        my $response = $ua->post(
-            'http://api.metacpan.org/v0/file',
-            Content_Type => 'application/json',
-            Content => to_json( $query, { canonical => 1 } ),
-        );
-        die $response->status_line unless $response->is_success;
-        decode_json $response->decoded_content;
-    };
-    if (not $results) {
-        warn "Failed get_module_versions_in_release for $author/$release: $@";
-        return {};
-    }
-    my $hits = $results->{hits}{hits};
-    die "get_module_versions_in_release($author, $release): too many results"
-        if @$hits >= $metacpan_size;
-
-    my %modules_in_release;
-    for my $hit (@$hits) {
-        my $path = $hit->{fields}{path};
-
-        # XXX try to ignore files that won't get installed
-        # XXX should use META noindex!
-        if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b!) {
-            warn "$author/$release: ignored non-installed module $path\n"
-                if $opt_debug;
-            next;
-        }
-
-        my $size = $hit->{fields}{"_source.stat.size"};
-        # files can contain more than one package ('module')
-        my $rel_mods = $hit->{fields}{"_source.module"} || [];
-        for my $mod (@$rel_mods) { # actually packages in the file
-
-            # Some files may contain multiple packages. We want to ignore
-            # all except the one that matches the name of the file.
-            # We use a fairly loose (but still very effective) test because we
-            # can't rely on $path including the full package name.
-            (my $filebasename = $hit->{fields}{name}) =~ s/\.pm$//;
-            if ($mod->{name} !~ m/\b$filebasename$/) {
-                warn "$author/$release: ignored $mod->{name} in $path\n"
-                    if $opt_debug;
-                next;
-            }
-
-            # warn if package previously seen in this release
-            # with a different version or file size
-            if (my $prev = $modules_in_release{$mod->{name}}) {
-                my $version_obj = eval { version->parse($mod->{version}) };
-                die "$author/$release: $mod $mod->{version}: $@" if $@;
-
-                if ($opt_verbose) {
-                    # XXX could add a show-only-once cache here
-                    my $msg = "$mod->{name} $mod->{version} ($size) seen in $path after $prev->{path} $prev->{version} ($prev->{size})";
-                    warn "$release: $msg\n"
-                        if ($version_obj != version->parse($prev->{version}) or $size != $prev->{size});
-                }
-            }
-
-            # keep result small as Storable thawing this is major runtime cost
-            # (specifically we avoid storing a version_obj here)
-            $modules_in_release{$mod->{name}} = {
-                name => $mod->{name},
-                path => $path,
-                version => $mod->{version},
-                size => $size,
-            };
-        }
-    }
-
-    warn "\n$author/$release contains: @{[ map { qq($_->{name} $_->{version}) } values %modules_in_release ]}\n"
-        if $opt_debug;
-
-    return \%modules_in_release;
-}
-
 
 sub get_file_mtime {
     my ($file) = @_;
@@ -997,7 +482,7 @@ sub find_installed_modules {
                         #my $content = read_file($File::Find::name);
                         #unless ( $content =~ m/^ \s* package \s+ (\#.*\n\s*)? $mod \b/xm ) {
                         #warn "No 'package $mod' seen in $File::Find::name\n"
-                        #if $opt_verbose && $content =~ /\b package \b/x;
+                        #if $VERBOSE && $content =~ /\b package \b/x;
                         #return;
                         #}
 
@@ -1016,10 +501,10 @@ sub find_installed_modules {
 
 
 sub perllocal_distro_mod_version {
-    my ($distname, $perllocalpod) = @_;
+    my ($distro_key_mod_names, $distname, $perllocalpod) = @_;
 
     ( my $dist_mod_name = $distname ) =~ s/-/::/g;
-    my $key_mod_name = $distro_key_mod_names{$distname} || $dist_mod_name;
+    my $key_mod_name = $distro_key_mod_names->{$distname} || $dist_mod_name;
 
     our $perllocal_distro_mod_version;
     if (not $perllocal_distro_mod_version) { # initial setup
@@ -1060,84 +545,29 @@ sub module_progress_indicator {
     }
 }
 
+=head1 OTHERS
 
-# copied from CPAN::Mini::Inject and hacked
+This module checks $::DEBUG and $::VERBOSE for obvious proposes.
 
-sub _readpkgs {
-    my ($cpandir) = @_;
+This module uses L<Dist::Surveyor::Inquiry> to communicate with MetaCPAN. 
+Check that module's documentation for options and caching. 
 
-    my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
-    return [] if not -f $packages_file;
+You can use L<Dist::Surveyor::MakeCpan> to take the list of releases
+and create a mini-cpan containing them.
 
-    my $gzread = Compress::Zlib::gzopen($packages_file, 'rb')
-        or croak "Cannot open $packages_file: " . $Compress::Zlib::gzerrno . "\n";
+=head1 AUTHOR
 
-    my $inheader = 1;
-    my @packages;
-    my $package;
+Written by Tim Bunce E<lt>Tim.Bunce@pobox.comE<gt> 
 
-    while ( $gzread->gzreadline( $package ) ) {
-        if ( $inheader ) {
-            $inheader = 0 unless $package =~ /\S/;
-            next;
-        }
-        chomp $package;
-        push @packages, $package;
-    }
-
-    $gzread->gzclose;
-
-    return \@packages;
-}
-
-sub _writepkgs {
-    my ($cpandir, $pkgs) = @_;
-
-    my $packages_file = $cpandir.'/modules/02packages.details.txt.gz';
-    my $gzwrite = Compress::Zlib::gzopen($packages_file, 'wb')
-        or croak "Cannot open $packages_file for writing: " . $Compress::Zlib::gzerrno;
-    
-    $gzwrite->gzwrite( "File:         02packages.details.txt\n" );
-    $gzwrite->gzwrite(
-        "URL:          http://www.perl.com/CPAN/modules/02packages.details.txt\n"
-    );
-    $gzwrite->gzwrite(
-        'Description:  Package names found in directory $CPAN/authors/id/'
-        . "\n" );
-    $gzwrite->gzwrite( "Columns:      package name, version, path\n" );
-    $gzwrite->gzwrite(
-        "Intended-For: Automated fetch routines, namespace documentation.\n"
-    );
-    $gzwrite->gzwrite( "Written-By:   $0 0.001\n" ); # XXX TODO
-    $gzwrite->gzwrite( "Line-Count:   " . scalar( @$pkgs ) . "\n" );
-    # Last-Updated: Sat, 19 Mar 2005 19:49:10 GMT
-    my @date = split( /\s+/, scalar( gmtime ) );
-    $gzwrite->gzwrite( "Last-Updated: $date[0], $date[2] $date[1] $date[4] $date[3] GMT\n\n" );
-    
-    $gzwrite->gzwrite( "$_\n" ) for ( @$pkgs );
-    
-    $gzwrite->gzclose;
-}
-
-sub _fmtmodule {
-    my ( $module, $file, $version ) = @_;
-    $version = "undef" if not defined $version;
-    my $fw = 38 - length $version;
-    $fw = length $module if $fw < length $module;
-    return sprintf "%-${fw}s %s  %s", $module, $version, $file;
-}
-
-sub first_word {
-    my $string = shift;
-    return ($string =~ m/^(\w+)/) ? $1 : $string;
-}
-
-sub distname_info_from_url {
-    my ($url) = @_;
-    $url =~ s{.* \b authors/id/ }{}x
-        or warn "No authors/ in '$url'\n";
-    my $di = CPAN::DistnameInfo->new($url);
-    return $di;
-}
+Maintained by Fomberg Shmuel, E<lt>shmuelfomberg@gmail.comE<gt>
+ 
+=head1 COPYRIGHT AND LICENSE
+ 
+Copyright 2011-2013 by Tim Bunce.
+ 
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
+ 
+=cut
 
 1;

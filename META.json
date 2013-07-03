@@ -29,19 +29,20 @@
       },
       "runtime" : {
          "requires" : {
+            "perl" : "5.006"
+         }
+      },
+      "test" : {
+         "requires" : {
+            "Archive::Tar" : "0",
             "CPAN::DistnameInfo" : "0",
             "Compress::Zlib" : "0",
             "JSON" : "0",
             "LWP::UserAgent" : "0",
             "Module::CoreList" : "0",
             "Module::Metadata" : "0",
-            "perl" : "5.006",
+            "Test::More" : "0.88",
             "version" : "0"
-         }
-      },
-      "test" : {
-         "requires" : {
-            "Test::More" : "0.88"
          }
       }
    },
@@ -54,6 +55,6 @@
          "web" : "https://github.com/semuel/Dist-Surveyor"
       }
    },
-   "version" : "0.009"
+   "version" : "0.010"
 }
 
