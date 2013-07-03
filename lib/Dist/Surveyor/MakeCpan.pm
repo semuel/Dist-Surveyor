@@ -6,7 +6,7 @@ use Data::Dumper; # core
 use File::Path; # core
 use CPAN::DistnameInfo;
 use File::Basename qw{dirname};  # core
-use LWP::Simple qw{is_error};
+use LWP::Simple qw{is_error mirror};
 use LWP::UserAgent;
 use Dist::Surveyor::Inquiry;
 use List::Util qw(max); # core
@@ -200,15 +200,6 @@ sub add_release {
     $self->{gzwrite}->gzwrite(Dumper($ri));
     $self->{gzwrite}->gzwrite(",");
 
-}
-
-# download the file in $url, into $destfile. 
-# returns requrest status code
-sub mirror {
-    my ($url, $destfile) = @_;
-    my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
-    my $response = $ua->get($url, ':content_file' => $destfile);
-    return $response->code();
 }
 
 sub p_r_match_score {
