@@ -5,4 +5,9 @@ blib
 .*.swp
 *.log
 dist_surveyor-*.db*
+dist_surveyor_packed-*.db*
 t/testcpan
+fatlib
+fatpacker.packlists
+fatpacker.trace
+extlib/arch/auto/version/.packlist

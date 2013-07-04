@@ -1,7 +1,8 @@
 #!/bin/sh
 
-fatpack trace $1
-fatpack packlists-for `sort fatpacker.trace` > fatpacker.packlists
-fatpack tree `sort fatpacker.packlists` # sort to put Moose before Moose::
-(fatpack file; cat $1 )
+fatpack trace bin/dist_surveyor
+fatpack packlists-for `cat fatpacker.trace` > fatpacker.packlists
+./process_fatpacker_packlist.pl fatpacker.packlists
+fatpack tree `cat fatpacker.packlists`
+(fatpack file; cat bin/dist_surveyor ) > dist_surveyor_packed.pl
 rm fatpacker.trace fatpacker.packlists

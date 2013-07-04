@@ -56,3 +56,4 @@
 
 # avoid memorize db file
 dist_surveyor-\d+\.db
+extlib
