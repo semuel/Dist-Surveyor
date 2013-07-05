@@ -1,6 +1,8 @@
 Revision history for Dist-Surveyor
 
 {{$NEXT}}
+
+0.010     2013-07-05 11:15:05 Asia/Tokyo
 	Major refactoring done
 	A fatpacked version created
 
