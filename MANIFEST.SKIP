@@ -56,4 +56,9 @@
 
 # avoid memorize db file
 dist_surveyor-\d+\.db
+dist_surveyor_packed-\d+\.db
 extlib
+fatlib
+process_fatpacker_packlist.pl
+dist_surveyor_packed.pl
+fatpackit.sh

@@ -34,6 +34,15 @@ tested on took about 60 minutes to process around 500 distributions with no
 cached data, and under 10 minutes for later runs that could reuse the cached
 data. The cache file ended up about 40MB in size.)
 
+=head1 Fatpacked script
+
+A fatpacked version of this script exists in:
+L<https://raw.github.com/semuel/Dist-Surveyor/master/dist_surveyor_packed.pl>
+
+Please note that the packed version expect that the following modules already
+installed on the local system: L<Data::Dumper>, L<Carp> and L<LWP>. Also,
+if you are planing to --makecpan, you also need L<Compress::Zlib>
+
 =head1 OPTIONS
 
     --verbose    Show more detailed progress
