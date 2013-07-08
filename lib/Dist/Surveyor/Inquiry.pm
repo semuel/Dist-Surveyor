@@ -9,6 +9,7 @@ use LWP::UserAgent;
 use JSON;
 use Scalar::Util qw(looks_like_number); # core
 use Data::Dumper;
+use version;
 
 =head1 NAME
 
@@ -40,8 +41,6 @@ For initating cache-on-disk, call Dist::Surveyor::Inquiry->perma_cache()
 
 =back
 
-=head1 FUNCTIONS
-
 =cut
 
 # We have to limit the number of results when using MetaCPAN::API.
@@ -72,6 +71,16 @@ our @EXPORT = qw{
 my %memoize_cache;
 my $locking_file;
 
+=head1 CLASS METHODS
+
+=head2 Dist::Surveyor::Inquiry->perma_cache()
+
+Enable caching to disk of all the MetaCPAN API requests.
+This cache can grew to be quite big - 40MB is one case, but it worth it,
+as if you will need to run this program again, it will run much faster.
+
+=cut
+
 sub perma_cache {
     my $class = shift;
     my $db_generation = 3; # XXX increment on incompatible change
@@ -99,6 +108,8 @@ for my $subname (@memoize_subs) {
     );
     memoize($subname, %memoize_args);
 }
+
+=head1 FUNCTIONS
 
 =head2 get_release_info($author, $release)
 

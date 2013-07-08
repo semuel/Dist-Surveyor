@@ -79,6 +79,24 @@ A hash-ref, with a list of irregular named releases. i.e. 'libwww-perl' => 'LWP'
 
 $search_dirs is an array-ref containing the list of directories to survey.
 
+Returns a list, where each element is a hashref representing one installed distibution.
+This hashref is what MetaCPAN returns for http://api.metacpan.org/v0/release/$author/$release,
+with two additional keys: 
+
+=over
+
+=item *
+
+'url' - that same as 'download_url', but without the hostname. can be used to
+download the file for your favorite mirror
+
+=item *
+
+'dist_data' - Hashref containing info about the release, i.e. percent_installed.
+(fully installed releases will have '100.00')
+
+=back
+
 =cut
 
 sub determine_installed_releases {
