@@ -6,7 +6,7 @@ my %fatpacked;
 $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   package Dist::Surveyor;
   {
-    $Dist::Surveyor::VERSION = '0.010';
+    $Dist::Surveyor::VERSION = '0.011';
   }
   
   =head1 NAME
@@ -15,7 +15,7 @@ $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   
   =head1 VERSION
   
-  version 0.010
+  version 0.011
   
   =head1 SYNOPSIS
   
@@ -92,6 +92,24 @@ $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   
   $search_dirs is an array-ref containing the list of directories to survey.
   
+  Returns a list, where each element is a hashref representing one installed distibution.
+  This hashref is what MetaCPAN returns for http://api.metacpan.org/v0/release/$author/$release,
+  with two additional keys: 
+  
+  =over
+  
+  =item *
+  
+  'url' - that same as 'download_url', but without the hostname. can be used to
+  download the file for your favorite mirror
+  
+  =item *
+  
+  'dist_data' - Hashref containing info about the release, i.e. percent_installed.
+  (fully installed releases will have '100.00')
+  
+  =back
+  
   =cut
   
   sub determine_installed_releases {
@@ -116,79 +134,8 @@ $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
           }
   
           module_progress_indicator($module) unless $VERBOSE;
-  
-          my $mod_version = do {
-              # silence warnings about duplicate VERSION declarations
-              # eg Catalyst::Controller::DBIC::API* 2.002001
-              local $SIG{__WARN__} = sub { warn @_ if $_[0] !~ /already declared with version/ };
-              my $mm = Module::Metadata->new_from_file($mod_file);
-              $mm->version; # only one version for one package in file
-          };
-          $mod_version ||= 0; # XXX
-          my $mod_file_size = -s $mod_file;
-  
-          # Eliminate modules that will be supplied by the target perl version
-          if ( my $cv = $Module::CoreList::version{ $options->{opt_perlver} }->{$module} ) {
-              $cv =~ s/ //g;
-              if (version->parse($cv) >= version->parse($mod_version)) {
-                  warn "$module is core in perl $options->{opt_perlver} (lib: $mod_version, core: $cv) - skipped\n";
-                  next;
-              }
-          }
-  
-          my $mi = $installed_mod_info{$module} = {
-              file => $mod_file,
-              module => $module,
-              version => $mod_version,
-              version_obj => version->parse($mod_version),
-              size => $mod_file_size,
-          };
-  
-          # ignore modules we know aren't indexed
-          next if $module =~ /^Moose::Meta::Method::Accessor::Native::/;
-  
-          # XXX could also consider file mtime: releases newer than the mtime
-          # of the module file can't be the origin of that module file.
-          # (assuming clocks and file times haven't been messed with)
-  
-          eval {
-              my $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size);
-              if (not %$ccdr) {
-                  $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, 0);
-                  if (%$ccdr) {
-                      # probably either a local change/patch or installed direct from repo
-                      # but with a version number that matches a release
-                      warn "$module $mod_version on CPAN but with different file size (not $mod_file_size)\n"
-                          if $mod_version or $VERBOSE;
-                      $mi->{file_size_mismatch}++;
-                  }
-                  elsif ($ccdr = get_candidate_cpan_dist_releases_fallback($module, $mod_version) and %$ccdr) {
-                      warn "$module $mod_version not on CPAN but assumed to be from @{[ sort keys %$ccdr ]}\n"
-                          if $mod_version or $VERBOSE;
-                      $mi->{cpan_dist_fallback}++;
-                  }
-                  else {
-                      $mi->{version_not_on_cpan}++;
-                      # Possibly:
-                      # - a local change/patch or installed direct from repo
-                      #   with a version number that was never released.
-                      # - a private module never released on cpan.
-                      # - a build-time create module eg common/sense.pm.PL
-                      warn "$module $mod_version not found on CPAN\n"
-                          if $mi->{version} # no version implies uninteresting
-                          or $VERBOSE;
-                      # XXX could try finding the module with *any* version on cpan
-                      # to help with later advice. ie could select as candidates
-                      # the version above and the version below the number we have,
-                      # and set a flag to inform later logic.
-                  }
-              }
-              $mi->{candidate_cpan_dist_releases} = $ccdr if %$ccdr;
-          };
-          if ($@) {
-              warn "Failed get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size): $@";
-          }
-  
+          my $mi = get_installed_mod_info($options, $module, $mod_file);
+          $installed_mod_info{$module} = $mi if $mi;
       }
   
   
@@ -260,79 +207,187 @@ $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   
       for my $distname ( sort keys %best_dist ) {
           my $releases = $best_dist{$distname};
-  
-          my @dist_by_version  = sort {
-              $a->{dist}{version_obj}        <=> $b->{dist}{version_obj} or
-              $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed}
-          } values %$releases;
-          my @dist_by_fraction = sort {
-              $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed} or
-              $a->{dist}{version_obj}        <=> $b->{dist}{version_obj}
-          } values %$releases;
-          
-          my @remnant_dists  = @dist_by_version;
-          my $installed_dist = pop @remnant_dists;
-  
-          # is the most recent candidate dist version also the one with the
-          # highest fraction_installed?
-          if ($dist_by_version[-1] == $dist_by_fraction[-1]) {
-              # this is the common case: we'll assume that's installed and the
-              # rest are remnants of earlier versions
-          }
-          elsif ($dist_by_fraction[-1]{dist}{fraction_installed} == 100) {
-              warn "Unsure which $distname is installed from among @{[ keys %$releases ]}\n";
-              @remnant_dists  = @dist_by_fraction;
-              $installed_dist = pop @remnant_dists;
-              warn "Selecting the one that apprears to be 100% installed\n";
-          }
-          else {
-              # else grumble so the user knows to ponder the possibilities
-              warn "Can't determine which $distname is installed from among @{[ keys %$releases ]}\n";
-              warn Dumper([\@dist_by_version, \@dist_by_fraction]);
-              warn "\tSelecting based on latest version\n";
-          }
-  
-          if (@remnant_dists or $DEBUG) {
-              warn "Distributions with remnants (chosen release is first):\n"
-                  unless our $dist_with_remnants_warning++;
-              warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
-              for ($installed_dist, @remnant_dists) {
-                  my $fi = $_->{dist}{fraction_installed};
-                  my $modules = $_->{modules};
-                  my $mv_desc = join(", ", map { "$_->{module} $_->{version}" } @$modules);
-                  warn sprintf "\t%s\t%s%% installed: %s\n",
-                      $_->{dist}{release},
-                      $_->{dist}{percent_installed},
-                      (@$modules > 4 ? "(".@$modules." modules)" : $mv_desc),
-              }
-          }
-  
-          # note ordering: remnants first
-          for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
-              my ($author, $distribution, $release)
-                  = @{$_->{dist}}{qw(author distribution release)};
-  
-              my $release_data = get_release_info($author, $release);
-              next unless $release_data;
-              
-              # shortcuts
-              (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
-  
-              push @installed_releases, {
-                  # 
-                  %$release_data,
-                  # extra items mushed inhandy shortcuts
-                  url => $url,
-                  # raw data structures
-                  dist_data => $_->{dist},
-              };
-          }
-          #die Dumper(\@installed_releases);
+          push @installed_releases, refine_releases($options, $distname, $releases);
       }
   
       # sorting into dependency order could be added later, maybe
   
       return @installed_releases;
+  }
+  
+  sub refine_releases {
+      my ($options, $distname, $releases) = @_;
+  
+      my @dist_by_version  = sort {
+          $a->{dist}{version_obj}        <=> $b->{dist}{version_obj} or
+          $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed}
+      } values %$releases;
+      my @dist_by_fraction = sort {
+          $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed} or
+          $a->{dist}{version_obj}        <=> $b->{dist}{version_obj}
+      } values %$releases;
+      
+      my @remnant_dists  = @dist_by_version;
+      my $installed_dist = pop @remnant_dists;
+  
+      # is the most recent candidate dist version also the one with the
+      # highest fraction_installed?
+      if ($dist_by_version[-1] == $dist_by_fraction[-1]) {
+          # this is the common case: we'll assume that's installed and the
+          # rest are remnants of earlier versions
+      }
+      elsif ($dist_by_fraction[-1]{dist}{fraction_installed} == 100) {
+          warn "Unsure which $distname is installed from among @{[ keys %$releases ]}\n";
+          @remnant_dists  = @dist_by_fraction;
+          $installed_dist = pop @remnant_dists;
+          warn "Selecting the one that apprears to be 100% installed\n";
+      }
+      else {
+          # else grumble so the user knows to ponder the possibilities
+          warn "Can't determine which $distname is installed from among @{[ keys %$releases ]}\n";
+          warn Dumper([\@dist_by_version, \@dist_by_fraction]);
+          warn "\tSelecting based on latest version\n";
+      }
+  
+      if (@remnant_dists or $DEBUG) {
+          warn "Distributions with remnants (chosen release is first):\n"
+              unless our $dist_with_remnants_warning++;
+          warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
+          for ($installed_dist, @remnant_dists) {
+              my $fi = $_->{dist}{fraction_installed};
+              my $modules = $_->{modules};
+              my $mv_desc = join(", ", map { "$_->{module} $_->{version}" } @$modules);
+              warn sprintf "\t%s\t%s%% installed: %s\n",
+                  $_->{dist}{release},
+                  $_->{dist}{percent_installed},
+                  (@$modules > 4 ? "(".@$modules." modules)" : $mv_desc),
+          }
+      }
+  
+      my @installed_releases;
+      # note ordering: remnants first
+      for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
+          my ($author, $release)
+              = @{$_->{dist}}{qw(author release)};
+  
+          my $release_data = get_release_info($author, $release);
+          next unless $release_data;
+          
+          # shortcuts
+          (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
+  
+          push @installed_releases, {
+              # 
+              %$release_data,
+              # extra items mushed inhandy shortcuts
+              url => $url,
+              # raw data structures
+              dist_data => $_->{dist},
+          };
+      }
+      #die Dumper(\@installed_releases);
+      return @installed_releases;
+  }
+  
+  # for each installed module, get the list of releases that it exists in
+  # Parameters:
+  #   $options - uses only opt_perlver
+  #   $module - module name (i.e. 'Dist::Surveyor')
+  #   $mod_file - the location of this module on the filesystem
+  # Return:
+  #   undef if this module should be skipped
+  #   otherwise, a hashref containing:
+  #       file => $mod_file,
+  #       module => $module,
+  #       version => $mod_version,
+  #       version_obj => same as version, but as an object,
+  #       size => $mod_file_size,
+  #       # optional flags:
+  #       file_size_mismatch => 1,
+  #       cpan_dist_fallback => 1, # could not find this module/version on cpan,
+  #           # but found a release with that version, containing such module
+  #       version_not_on_cpan> 1, # can not find this file on CPAN.
+  #       # releases info
+  #       candidate_cpan_dist_releases => hashref,
+  #
+  #   candidate_cpan_dist_releases hashref contain a map of all the releases
+  #   that this module exists in. see get_candidate_cpan_dist_releases for more
+  #   info.
+  sub get_installed_mod_info {
+      my ($options, $module, $mod_file) = @_;
+  
+      my $mod_version = do {
+          # silence warnings about duplicate VERSION declarations
+          # eg Catalyst::Controller::DBIC::API* 2.002001
+          local $SIG{__WARN__} = sub { warn @_ if $_[0] !~ /already declared with version/ };
+          my $mm = Module::Metadata->new_from_file($mod_file);
+          $mm->version; # only one version for one package in file
+      };
+      $mod_version ||= 0; # XXX
+      my $mod_file_size = -s $mod_file;
+  
+      # Eliminate modules that will be supplied by the target perl version
+      if ( my $cv = $Module::CoreList::version{ $options->{opt_perlver} }->{$module} ) {
+          $cv =~ s/ //g;
+          if (version->parse($cv) >= version->parse($mod_version)) {
+              warn "$module is core in perl $options->{opt_perlver} (lib: $mod_version, core: $cv) - skipped\n";
+              return;
+          }
+      }
+  
+      my $mi = {
+          file => $mod_file,
+          module => $module,
+          version => $mod_version,
+          version_obj => version->parse($mod_version),
+          size => $mod_file_size,
+      };
+  
+      # ignore modules we know aren't indexed
+      return $mi if $module =~ /^Moose::Meta::Method::Accessor::Native::/;
+  
+      # XXX could also consider file mtime: releases newer than the mtime
+      # of the module file can't be the origin of that module file.
+      # (assuming clocks and file times haven't been messed with)
+  
+      eval {
+          my $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size);
+          if (not %$ccdr) {
+              $ccdr = get_candidate_cpan_dist_releases($module, $mod_version, 0);
+              if (%$ccdr) {
+                  # probably either a local change/patch or installed direct from repo
+                  # but with a version number that matches a release
+                  warn "$module $mod_version on CPAN but with different file size (not $mod_file_size)\n"
+                      if $mod_version or $VERBOSE;
+                  $mi->{file_size_mismatch}++;
+              }
+              elsif ($ccdr = get_candidate_cpan_dist_releases_fallback($module, $mod_version) and %$ccdr) {
+                  warn "$module $mod_version not on CPAN but assumed to be from @{[ sort keys %$ccdr ]}\n"
+                      if $mod_version or $VERBOSE;
+                  $mi->{cpan_dist_fallback}++;
+              }
+              else {
+                  $mi->{version_not_on_cpan}++;
+                  # Possibly:
+                  # - a local change/patch or installed direct from repo
+                  #   with a version number that was never released.
+                  # - a private module never released on cpan.
+                  # - a build-time create module eg common/sense.pm.PL
+                  warn "$module $mod_version not found on CPAN\n"
+                      if $mi->{version} # no version implies uninteresting
+                      or $VERBOSE;
+                  # XXX could try finding the module with *any* version on cpan
+                  # to help with later advice. ie could select as candidates
+                  # the version above and the version below the number we have,
+                  # and set a flag to inform later logic.
+              }
+          }
+          $mi->{candidate_cpan_dist_releases} = $ccdr if %$ccdr;
+      };
+      if ($@) {
+          warn "Failed get_candidate_cpan_dist_releases($module, $mod_version, $mod_file_size): $@";
+      }
+      return $mi;
   }
   
   # pick_best_cpan_dist_release - memoized
@@ -582,7 +637,7 @@ DIST_SURVEYOR
 $fatpacked{"Dist/Surveyor/DB_File.pm"} = <<'DIST_SURVEYOR_DB_FILE';
   package Dist::Surveyor::DB_File;
   {
-    $Dist::Surveyor::DB_File::VERSION = '0.010';
+    $Dist::Surveyor::DB_File::VERSION = '0.011';
   }
   use strict;
   use warnings;
@@ -620,7 +675,7 @@ DIST_SURVEYOR_DB_FILE
 $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   package Dist::Surveyor::Inquiry;
   {
-    $Dist::Surveyor::Inquiry::VERSION = '0.010';
+    $Dist::Surveyor::Inquiry::VERSION = '0.011';
   }
   use strict;
   use warnings;
@@ -632,6 +687,7 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   use JSON;
   use Scalar::Util qw(looks_like_number); # core
   use Data::Dumper;
+  use version;
   
   =head1 NAME
   
@@ -639,7 +695,7 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   
   =head1 VERSION
   
-  version 0.010
+  version 0.011
   
   =head1 DESCRIPTION
   
@@ -666,8 +722,6 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   (this should be usually done, except in testing environment)
   
   =back
-  
-  =head1 FUNCTIONS
   
   =cut
   
@@ -699,6 +753,16 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   my %memoize_cache;
   my $locking_file;
   
+  =head1 CLASS METHODS
+  
+  =head2 Dist::Surveyor::Inquiry->perma_cache()
+  
+  Enable caching to disk of all the MetaCPAN API requests.
+  This cache can grew to be quite big - 40MB is one case, but it worth it,
+  as if you will need to run this program again, it will run much faster.
+  
+  =cut
+  
   sub perma_cache {
       my $class = shift;
       my $db_generation = 3; # XXX increment on incompatible change
@@ -726,6 +790,8 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
       );
       memoize($subname, %memoize_args);
   }
+  
+  =head1 FUNCTIONS
   
   =head2 get_release_info($author, $release)
   
@@ -1045,7 +1111,7 @@ DIST_SURVEYOR_INQUIRY
 $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   package Dist::Surveyor::MakeCpan;
   {
-    $Dist::Surveyor::MakeCpan::VERSION = '0.010';
+    $Dist::Surveyor::MakeCpan::VERSION = '0.011';
   }
   use strict;
   use warnings;
@@ -1054,7 +1120,7 @@ $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   use File::Path; # core
   use CPAN::DistnameInfo;
   use File::Basename qw{dirname};  # core
-  use LWP::Simple qw{is_error};
+  use LWP::Simple qw{is_error mirror};
   use LWP::UserAgent;
   use Dist::Surveyor::Inquiry;
   use List::Util qw(max); # core
@@ -1250,15 +1316,6 @@ $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   
   }
   
-  # download the file in $url, into $destfile. 
-  # returns requrest status code
-  sub mirror {
-      my ($url, $destfile) = @_;
-      my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
-      my $response = $ua->get($url, ':content_file' => $destfile);
-      return $response->code();
-  }
-  
   sub p_r_match_score {
       my ($pkg_name, $ri) = @_;
       my @p = split /\W/, $pkg_name;
@@ -1358,7 +1415,7 @@ $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   
   =head1 VERSION
   
-  version 0.010
+  version 0.011
   
   =head1 SYNOPSIS
   
@@ -9026,6 +9083,15 @@ metacpan is cached so future runs are much faster.  (The system this code was
 tested on took about 60 minutes to process around 500 distributions with no
 cached data, and under 10 minutes for later runs that could reuse the cached
 data. The cache file ended up about 40MB in size.)
+
+=head1 Fatpacked script
+
+A fatpacked version of this script exists in:
+L<https://raw.github.com/semuel/Dist-Surveyor/master/dist_surveyor_packed.pl>
+
+Please note that the packed version expect that the following modules already
+installed on the local system: L<Data::Dumper>, L<Carp> and L<LWP>. Also,
+if you are planing to --makecpan, you also need L<Compress::Zlib>
 
 =head1 OPTIONS
 
