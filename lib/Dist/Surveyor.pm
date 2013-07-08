@@ -194,78 +194,85 @@ sub determine_installed_releases {
 
     for my $distname ( sort keys %best_dist ) {
         my $releases = $best_dist{$distname};
-
-        my @dist_by_version  = sort {
-            $a->{dist}{version_obj}        <=> $b->{dist}{version_obj} or
-            $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed}
-        } values %$releases;
-        my @dist_by_fraction = sort {
-            $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed} or
-            $a->{dist}{version_obj}        <=> $b->{dist}{version_obj}
-        } values %$releases;
-        
-        my @remnant_dists  = @dist_by_version;
-        my $installed_dist = pop @remnant_dists;
-
-        # is the most recent candidate dist version also the one with the
-        # highest fraction_installed?
-        if ($dist_by_version[-1] == $dist_by_fraction[-1]) {
-            # this is the common case: we'll assume that's installed and the
-            # rest are remnants of earlier versions
-        }
-        elsif ($dist_by_fraction[-1]{dist}{fraction_installed} == 100) {
-            warn "Unsure which $distname is installed from among @{[ keys %$releases ]}\n";
-            @remnant_dists  = @dist_by_fraction;
-            $installed_dist = pop @remnant_dists;
-            warn "Selecting the one that apprears to be 100% installed\n";
-        }
-        else {
-            # else grumble so the user knows to ponder the possibilities
-            warn "Can't determine which $distname is installed from among @{[ keys %$releases ]}\n";
-            warn Dumper([\@dist_by_version, \@dist_by_fraction]);
-            warn "\tSelecting based on latest version\n";
-        }
-
-        if (@remnant_dists or $DEBUG) {
-            warn "Distributions with remnants (chosen release is first):\n"
-                unless our $dist_with_remnants_warning++;
-            warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
-            for ($installed_dist, @remnant_dists) {
-                my $fi = $_->{dist}{fraction_installed};
-                my $modules = $_->{modules};
-                my $mv_desc = join(", ", map { "$_->{module} $_->{version}" } @$modules);
-                warn sprintf "\t%s\t%s%% installed: %s\n",
-                    $_->{dist}{release},
-                    $_->{dist}{percent_installed},
-                    (@$modules > 4 ? "(".@$modules." modules)" : $mv_desc),
-            }
-        }
-
-        # note ordering: remnants first
-        for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
-            my ($author, $release)
-                = @{$_->{dist}}{qw(author release)};
-
-            my $release_data = get_release_info($author, $release);
-            next unless $release_data;
-            
-            # shortcuts
-            (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
-
-            push @installed_releases, {
-                # 
-                %$release_data,
-                # extra items mushed inhandy shortcuts
-                url => $url,
-                # raw data structures
-                dist_data => $_->{dist},
-            };
-        }
-        #die Dumper(\@installed_releases);
+        push @installed_releases, refine_releases($options, $distname, $releases);
     }
 
     # sorting into dependency order could be added later, maybe
 
+    return @installed_releases;
+}
+
+sub refine_releases {
+    my ($options, $distname, $releases) = @_;
+
+    my @dist_by_version  = sort {
+        $a->{dist}{version_obj}        <=> $b->{dist}{version_obj} or
+        $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed}
+    } values %$releases;
+    my @dist_by_fraction = sort {
+        $a->{dist}{fraction_installed} <=> $b->{dist}{fraction_installed} or
+        $a->{dist}{version_obj}        <=> $b->{dist}{version_obj}
+    } values %$releases;
+    
+    my @remnant_dists  = @dist_by_version;
+    my $installed_dist = pop @remnant_dists;
+
+    # is the most recent candidate dist version also the one with the
+    # highest fraction_installed?
+    if ($dist_by_version[-1] == $dist_by_fraction[-1]) {
+        # this is the common case: we'll assume that's installed and the
+        # rest are remnants of earlier versions
+    }
+    elsif ($dist_by_fraction[-1]{dist}{fraction_installed} == 100) {
+        warn "Unsure which $distname is installed from among @{[ keys %$releases ]}\n";
+        @remnant_dists  = @dist_by_fraction;
+        $installed_dist = pop @remnant_dists;
+        warn "Selecting the one that apprears to be 100% installed\n";
+    }
+    else {
+        # else grumble so the user knows to ponder the possibilities
+        warn "Can't determine which $distname is installed from among @{[ keys %$releases ]}\n";
+        warn Dumper([\@dist_by_version, \@dist_by_fraction]);
+        warn "\tSelecting based on latest version\n";
+    }
+
+    if (@remnant_dists or $DEBUG) {
+        warn "Distributions with remnants (chosen release is first):\n"
+            unless our $dist_with_remnants_warning++;
+        warn "@{[ map { $_->{dist}{release} } reverse @dist_by_fraction ]}\n"; 
+        for ($installed_dist, @remnant_dists) {
+            my $fi = $_->{dist}{fraction_installed};
+            my $modules = $_->{modules};
+            my $mv_desc = join(", ", map { "$_->{module} $_->{version}" } @$modules);
+            warn sprintf "\t%s\t%s%% installed: %s\n",
+                $_->{dist}{release},
+                $_->{dist}{percent_installed},
+                (@$modules > 4 ? "(".@$modules." modules)" : $mv_desc),
+        }
+    }
+
+    my @installed_releases;
+    # note ordering: remnants first
+    for (($options->{opt_remnants} ? @remnant_dists : ()), $installed_dist) {
+        my ($author, $release)
+            = @{$_->{dist}}{qw(author release)};
+
+        my $release_data = get_release_info($author, $release);
+        next unless $release_data;
+        
+        # shortcuts
+        (my $url = $release_data->{download_url}) =~ s{ .*? \b authors/ }{authors/}x;
+
+        push @installed_releases, {
+            # 
+            %$release_data,
+            # extra items mushed inhandy shortcuts
+            url => $url,
+            # raw data structures
+            dist_data => $_->{dist},
+        };
+    }
+    #die Dumper(\@installed_releases);
     return @installed_releases;
 }
 
