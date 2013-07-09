@@ -6,7 +6,7 @@ my %fatpacked;
 $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   package Dist::Surveyor;
   {
-    $Dist::Surveyor::VERSION = '0.011';
+    $Dist::Surveyor::VERSION = '0.013';
   }
   
   =head1 NAME
@@ -15,7 +15,7 @@ $fatpacked{"Dist/Surveyor.pm"} = <<'DIST_SURVEYOR';
   
   =head1 VERSION
   
-  version 0.011
+  version 0.013
   
   =head1 SYNOPSIS
   
@@ -637,7 +637,7 @@ DIST_SURVEYOR
 $fatpacked{"Dist/Surveyor/DB_File.pm"} = <<'DIST_SURVEYOR_DB_FILE';
   package Dist::Surveyor::DB_File;
   {
-    $Dist::Surveyor::DB_File::VERSION = '0.011';
+    $Dist::Surveyor::DB_File::VERSION = '0.013';
   }
   use strict;
   use warnings;
@@ -675,7 +675,7 @@ DIST_SURVEYOR_DB_FILE
 $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   package Dist::Surveyor::Inquiry;
   {
-    $Dist::Surveyor::Inquiry::VERSION = '0.011';
+    $Dist::Surveyor::Inquiry::VERSION = '0.013';
   }
   use strict;
   use warnings;
@@ -695,7 +695,7 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   
   =head1 VERSION
   
-  version 0.011
+  version 0.013
   
   =head1 DESCRIPTION
   
@@ -737,7 +737,11 @@ $fatpacked{"Dist/Surveyor/Inquiry.pm"} = <<'DIST_SURVEYOR_INQUIRY';
   *DEBUG = \$::DEBUG;
   *VERBOSE = \$::VERBOSE;
   
-  my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
+  my $ua = LWP::UserAgent->new( 
+      agent => $0, 
+      timeout => 10,
+      keep_alive => 3, 
+  );
   
   require Exporter;
   our @ISA = qw{Exporter};
@@ -1111,7 +1115,7 @@ DIST_SURVEYOR_INQUIRY
 $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   package Dist::Surveyor::MakeCpan;
   {
-    $Dist::Surveyor::MakeCpan::VERSION = '0.011';
+    $Dist::Surveyor::MakeCpan::VERSION = '0.013';
   }
   use strict;
   use warnings;
@@ -1415,7 +1419,7 @@ $fatpacked{"Dist/Surveyor/MakeCpan.pm"} = <<'DIST_SURVEYOR_MAKECPAN';
   
   =head1 VERSION
   
-  version 0.011
+  version 0.013
   
   =head1 SYNOPSIS
   
