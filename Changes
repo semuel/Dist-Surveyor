@@ -1,6 +1,8 @@
 Revision history for Dist-Surveyor
 
 {{$NEXT}}
+
+0.012     2013-07-09 16:07:55 Asia/Tokyo
 	Adding keep_alive to connections - major speedup
 	Changed to batch get_module_versions_in_release - another 30% speedup
 
