@@ -4,12 +4,7 @@ use Dist::Surveyor::Inquiry;
 use Data::Dumper;
 use Test::More;
 
-is(get_module_versions_in_release_cached('SEMUELF', 'Dist-Surveyor-0.009'), undef, "Still not in cache");
-my $modules_data = get_module_versions_in_releases(['SEMUELF', 'Dist-Surveyor-0.009']);
-is(scalar keys %$modules_data, 1, "get_module_versions_in_releases returned one answer");
-ok(exists $modules_data->{'SEMUELF/Dist-Surveyor-0.009'}, 'and the right one, too');
-isnt(get_module_versions_in_release_cached('SEMUELF', 'Dist-Surveyor-0.009'), undef, "now in cache");
-my $module_data = $modules_data->{'SEMUELF/Dist-Surveyor-0.009'};
+my $module_data = get_module_versions_in_release('SEMUELF', 'Dist-Surveyor-0.009');
 my $expected =  {
     'Dist::Surveyor' => {
         'version' => '0.009',

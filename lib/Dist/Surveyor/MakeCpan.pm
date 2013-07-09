@@ -158,8 +158,8 @@ sub add_release {
         warn "$mirror_status $main_url\n" if $verbose;
     }
 
-    my $mods_in_rel = get_module_versions_in_release_cached($ri->{author}, $ri->{name});
-    $mods_in_rel ||= get_module_versions_in_releases([$ri->{author}, $ri->{name}]);
+
+    my $mods_in_rel = get_module_versions_in_release($ri->{author}, $ri->{name});
 
     if (!keys %$mods_in_rel) { # XXX hack for common::sense
         (my $dist_as_pkg = $ri->{distribution}) =~ s/-/::/g;

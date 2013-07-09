@@ -66,8 +66,7 @@ our @ISA = qw{Exporter};
 our @EXPORT = qw{
     get_candidate_cpan_dist_releases
     get_candidate_cpan_dist_releases_fallback
-    get_module_versions_in_releases
-    get_module_versions_in_release_cached
+    get_module_versions_in_release
     get_release_info
 };
 
@@ -102,6 +101,7 @@ sub perma_cache {
 my @memoize_subs = qw(
     get_candidate_cpan_dist_releases
     get_candidate_cpan_dist_releases_fallback
+    get_module_versions_in_release
     get_release_info
 );
 for my $subname (@memoize_subs) {
@@ -308,18 +308,13 @@ sub _process_response {
     return \%dists;
 }
 
-=head2 get_module_versions_in_releases([$author, $release], [$author2, $release2], ...)
+=head2 get_module_versions_in_release($author, $release)
 
 Receive release info, such as:
 
-    get_module_versions_in_releases(['SEMUELF', 'Dist-Surveyor-0.009'])
+    get_module_versions_in_release('SEMUELF', 'Dist-Surveyor-0.009')
 
-We are using this function for a batch of releases for each time, as it is
-called a lot, and takes most of the program running time. see also 
-get_module_versions_in_release_cached for caching.
-
-And returns a hashref, with key is "author/release", and values are hashrefs.
-This hashref contains one entry for each module that exists 
+And returns a hashref, that contains one entry for each module that exists 
 in the release. module information is the format:
 
     'Dist::Surveyor' => {
@@ -334,42 +329,23 @@ possibilities and aren't actually installed, so generally it's quiet
 
 =cut
 
-sub get_module_versions_in_releases {
-    my @releases = @_;
-
-    my $err_str = '[' . join(', ', map "$_->[0]=>$_->[1]", @releases) . ']';
-
-    my @r_filters;
-    foreach my $rec (@releases) {
-        my ($author, $release) = @$rec;
-        push @r_filters, {
-            'and' => [
-                {"term" => {"release" => $release }},
-                {"term" => {"author" => $author }},
-                {"term" => {"mime" => "text/x-script.perl-module"}},
-            ]
-        };
-    }
-    my $filter;
-    if (scalar(@r_filters) == 1) {
-        $filter = $r_filters[0];
-    }
-    else {
-        $filter = { 'or' => \@r_filters };
-    }
+sub get_module_versions_in_release {
+    my ($author, $release) = @_;
 
     $metacpan_calls++;
-    my $query = {
-        "size" => $metacpan_size,
-        "query" =>  { "filtered" => {
-            "filter" => $filter,
-            "query" => {"match_all" => {}},
-        }},
-        "fields" => ["path","name","_source.module", "_source.stat.size",
-                     "_source.author", "_source.release"],
-    }; 
-
     my $results = eval { 
+        my $query = {
+            "size" => $metacpan_size,
+            "query" =>  { "filtered" => {
+                "filter" => {"and" => [
+                    {"term" => {"release" => $release }},
+                    {"term" => {"author" => $author }},
+                    {"term" => {"mime" => "text/x-script.perl-module"}},
+                ]},
+                "query" => {"match_all" => {}},
+            }},
+            "fields" => ["path","name","_source.module", "_source.stat.size"],
+        }; 
         my $response = $ua->post(
             'http://api.metacpan.org/v0/file',
             Content_Type => 'application/json',
@@ -379,23 +355,21 @@ sub get_module_versions_in_releases {
         decode_json $response->decoded_content;
     };
     if (not $results) {
-        warn "Failed get_module_versions_in_release for $err_str: $@";
+        warn "Failed get_module_versions_in_release for $author/$release: $@";
         return {};
     }
     my $hits = $results->{hits}{hits};
-    die "get_module_versions_in_release($err_str): too many results"
+    die "get_module_versions_in_release($author, $release): too many results"
         if @$hits >= $metacpan_size;
 
-    my %modules_in_all_release;
+    my %modules_in_release;
     for my $hit (@$hits) {
         my $path = $hit->{fields}{path};
-        my $mod_author = $hit->{fields}{"_source.author"};
-        my $mod_release = $hit->{fields}{"_source.release"};
 
         # XXX try to ignore files that won't get installed
         # XXX should use META noindex!
         if ($path =~ m!^(?:t|xt|tests?|inc|samples?|ex|examples?|bak|local-lib)\b!) {
-            warn "$mod_author/$mod_release: ignored non-installed module $path\n"
+            warn "$author/$release: ignored non-installed module $path\n"
                 if $DEBUG;
             next;
         }
@@ -411,28 +385,28 @@ sub get_module_versions_in_releases {
             # can't rely on $path including the full package name.
             (my $filebasename = $hit->{fields}{name}) =~ s/\.pm$//;
             if ($mod->{name} !~ m/\b$filebasename$/) {
-                warn "$mod_author/$mod_release: ignored $mod->{name} in $path\n"
+                warn "$author/$release: ignored $mod->{name} in $path\n"
                     if $DEBUG;
                 next;
             }
 
             # warn if package previously seen in this release
             # with a different version or file size
-            if (my $prev = $modules_in_all_release{"$mod_author/$mod_release"}->{$mod->{name}}) {
+            if (my $prev = $modules_in_release{$mod->{name}}) {
                 my $version_obj = eval { version->parse($mod->{version}) };
-                die "$mod_author/$mod_release: $mod $mod->{version}: $@" if $@;
+                die "$author/$release: $mod $mod->{version}: $@" if $@;
 
                 if ($VERBOSE) {
                     # XXX could add a show-only-once cache here
                     my $msg = "$mod->{name} $mod->{version} ($size) seen in $path after $prev->{path} $prev->{version} ($prev->{size})";
-                    warn "$mod_release: $msg\n"
+                    warn "$release: $msg\n"
                         if ($version_obj != version->parse($prev->{version}) or $size != $prev->{size});
                 }
             }
 
             # keep result small as Storable thawing this is major runtime cost
             # (specifically we avoid storing a version_obj here)
-            $modules_in_all_release{"$mod_author/$mod_release"}->{$mod->{name}} = {
+            $modules_in_release{$mod->{name}} = {
                 name => $mod->{name},
                 path => $path,
                 version => $mod->{version},
@@ -441,36 +415,10 @@ sub get_module_versions_in_releases {
         }
     }
 
-    # warn "\n$author/$release contains: @{[ map { qq($_->{name} $_->{version}) } values %modules_in_release ]}\n"
-    #     if $DEBUG;
+    warn "\n$author/$release contains: @{[ map { qq($_->{name} $_->{version}) } values %modules_in_release ]}\n"
+        if $DEBUG;
 
-    foreach my $release (keys %modules_in_all_release) {
-        my $key = join('', 'gmvir_cache', "\034", $release);
-        $memoize_cache{$key} = $modules_in_all_release{$release};
-    }
-
-    return \%modules_in_all_release;
-}
-
-=head2 get_module_versions_in_release_cached($author, $release)
-
-Check if we have the result of get_module_versions_in_releases for one release
-cached. So we will be able to bundle requests effectively, and not bundle
-a cached request with uncached requests.
-
-return undef if not cached, or the hashref for that release if cached.
-
-=cut
-
-sub get_module_versions_in_release_cached {
-    my ($author, $release) = @_;
-    my $key = join('', 'gmvir_cache', "\034", $author, '/', $release);
-    if (exists $memoize_cache{$key}) {
-        return $memoize_cache{$key};
-    }
-    else {
-        return;
-    }
+    return \%modules_in_release;
 }
 
 =head1 License, Copyright
