@@ -1,6 +1,8 @@
 Revision history for Dist-Surveyor
 
 {{$NEXT}}
+
+0.013     2013-07-09 16:19:07 Asia/Tokyo
 	Adding keep_alive to connections - major speedup
 
 0.011     2013-07-08 16:11:57 Asia/Tokyo
