@@ -55,7 +55,11 @@ our ($DEBUG, $VERBOSE);
 *DEBUG = \$::DEBUG;
 *VERBOSE = \$::VERBOSE;
 
-my $ua = LWP::UserAgent->new( agent => $0, timeout => 10 );
+my $ua = LWP::UserAgent->new( 
+    agent => $0, 
+    timeout => 10,
+    keep_alive => 3, 
+);
 
 require Exporter;
 our @ISA = qw{Exporter};
