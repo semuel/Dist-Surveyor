@@ -164,6 +164,7 @@ $| = 1;
 
 use Dist::Surveyor;
 use Dist::Surveyor::Inquiry; # internal
+use Dist::Surveyor::MakeCpan;
 
 use constant PROGNAME => 'dist_surveyor';
 
@@ -236,7 +237,6 @@ sub main {
 
 
     if ($opt_makecpan) {
-        require Dist::Surveyor::MakeCpan;
         my $cpan = Dist::Surveyor::MakeCpan->new(
             $opt_makecpan, PROGNAME, $distro_key_mod_names);
 

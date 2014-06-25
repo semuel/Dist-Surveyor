@@ -5,10 +5,21 @@ use warnings;
 use FindBin;
 use File::Spec;
 
-my @ignored_package = qw{ Data/Dumper Carp JSON/XS LWP };
+my @ignored_package = qw{ 
+    Data/Dumper 
+    Carp 
+    JSON/XS 
+    LWP 
+    Encode/Locale 
+    HTTP/Date 
+    HTTP/Message 
+    URI 
+    Cwd
+    List/Util
+    };
 
 my %handled_packages = (
-    map( { $_ => \&pass } qw{ Dist/Surveyor JSON Module/Metadata } ),
+    map( { $_ => \&pass } qw{ JSON JSON/PP Module/Metadata CPAN/DistnameInfo } ),
     version => \&version,
 );
 
@@ -22,13 +33,18 @@ while (my $line = <$fh>) {
     warn "Could not process line |$line|"
         unless $module;
     next if grep { $_ eq $module } @ignored_package;
-    my $handler = $handled_packages{$module}
+    my $handler = delete $handled_packages{$module}
         or die "I do not know what to do with the |$module| module";
     $line = $handler->($line);
     push @output, $line;
 
 }
 close $fh;
+
+if (%handled_packages) {
+    die "did not see the following modules: " . join(', ', keys %handled_packages);
+}
+
 open  $fh, ">", $filename or die "can not open $filename to write";
 print $fh join("\n", @output), "\n";
 close $fh;
