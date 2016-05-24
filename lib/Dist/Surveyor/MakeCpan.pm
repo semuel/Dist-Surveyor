@@ -60,7 +60,7 @@ sub close {
         }
         $packages{$pkg} = $line;
     };
-    _writepkgs($self->{cpan_dir}, [ sort values %packages ] );
+    _writepkgs($self->{cpan_dir}, [ sort { lc $a cmp lc $b } values %packages ] );
 
 
 
